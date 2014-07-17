@@ -24,11 +24,9 @@ float h_omega, h_lambda, h_fa, h_fb, h_mua, h_mub, h_mean;
 int h_comp;
 
 //simulation
-float h_trans;
-int h_dev, h_block, h_grid, h_spp, h_samples, h_2ndorder, h_trigger, h_initnoise;
-long h_paths, h_periods, h_threads, h_steps;
-__constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise;
-__constant__ long d_paths;
+int h_dev, h_block, h_grid, h_spp, h_samples, h_2ndorder, h_trigger, h_initnoise, h_paths, h_periods, h_trans;
+long h_threads, h_steps;
+__constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths;
 
 //output
 char *h_domain;
@@ -105,8 +103,8 @@ void usage(char **argv)
     printf("Simulation params:\n");
     printf("    -i, --dev=INT           set the gpu device to INT\n");
     printf("    -j, --block=INT         set the gpu block size to INT\n");
-    printf("    -k, --paths=LONG        set the number of paths to LONG\n");
-    printf("    -l, --periods=LONG      set the number of periods to LONG\n");
+    printf("    -k, --paths=INT        set the number of paths to INT\n");
+    printf("    -l, --periods=INT      set the number of periods to INT\n");
     printf("    -m, --trans=FLOAT       specify fraction FLOAT of periods which stands for transients\n");
     printf("    -n, --spp=INT           specify how many integration steps should be calculated\n");
     printf("                            for a single period of the driving force\n");
@@ -183,14 +181,14 @@ void parse_cla(int argc, char **argv)
                 h_block = atoi(optarg);
                 break;
             case 'k':
-                h_paths = atol(optarg);
-                cudaMemcpyToSymbol(d_paths, &h_paths, sizeof(long));
+                h_paths = atoi(optarg);
+                cudaMemcpyToSymbol(d_paths, &h_paths, sizeof(int));
                 break;
             case 'l':
-                h_periods = atol(optarg);
+                h_periods = atoi(optarg);
                 break;
             case 'm':
-                h_trans = atof(optarg);
+                h_trans = atoi(optarg);
                 break;
             case 'n':
                 h_spp = atoi(optarg);
@@ -460,9 +458,11 @@ __global__ void fold(float *d_x, float *d_fx, float p)
     l_x = d_x[idx];
     l_fx = d_fx[idx];
 
-    f = floorf(l_x/p)*p;
-    l_x = l_x - f;
-    l_fx = l_fx + f;
+    if (fabsf(l_x) >= p) {
+        f = floorf(l_x/p)*p;
+        l_x = l_x - f;
+        l_fx = l_fx + f;
+    }
 
     d_x[idx] = l_x;
     d_fx[idx] = l_fx;
@@ -471,7 +471,7 @@ __global__ void fold(float *d_x, float *d_fx, float p)
 //unfold periodic variable
 void unfold(float *x, float *fx)
 {
-    int i;
+    long i;
 
     for (i = 0; i < h_threads; i++) {
         x[i] = x[i] + fx[i];
@@ -759,7 +759,7 @@ void prepare()
     float dxtmp = h_beginx;
     float dxstep = (h_endx - h_beginx)/h_points;
 
-    long i;
+    int i;
         
     //set domainx
     for (i = 0; i < h_points; i++) {
@@ -846,8 +846,8 @@ void moments(float *av, float *av2, float *dc)
             sx2 += h_x[j*h_paths + i]*h_x[j*h_paths + i];
         }
 
-        av[j] = sv/((1.0f - h_trans)*h_steps)/h_paths;
-        av2[j] = sv2/((1.0f - h_trans)*h_steps)/h_paths;
+        av[j] = sv/((h_periods - h_trans)*h_spp)/h_paths;
+        av2[j] = sv2/((h_periods - h_trans)*h_spp)/h_paths;
 
         //external driving
         if (h_domainx == 'w') {
@@ -964,7 +964,7 @@ void moments(float *av, float *av2, float *dc)
 //calculate ensemble average
 void ensemble_average(float *h_x, float *h_v, float &sx, float &sv, float &sx2, float &sv2)
 {
-    int i;
+    long i;
 
     sx = 0.0f;
     sv = 0.0f;
@@ -1041,7 +1041,7 @@ int main(int argc, char **argv)
     //asymptotic long time average velocity <<v>>, <<v^2>> and diffusion coefficient
     if (h_moments) {
         float *av, *av2, *dc;
-        int i;
+        long i;
 
         av = (float*)malloc(size_p);
         av2 = (float*)malloc(size_p);
@@ -1055,8 +1055,8 @@ int main(int argc, char **argv)
             for (i = 0; i < h_steps; i += h_samples) {
                 run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
                 fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
-                fold<<<h_grid, h_block>>>(d_w, d_fw, 2.0f*PI);
-                if ( i == (int) h_trans*h_steps) {
+                fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
+                if (i == h_trans*h_spp) {
                     h_trigger = 1;
                     cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
                 }
@@ -1133,8 +1133,8 @@ int main(int argc, char **argv)
                 for (i = 0; i < h_steps; i += h_samples) {
                     run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
                     fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
-                    fold<<<h_grid, h_block>>>(d_w, d_fw, 2.0f*PI);
-                    if ( i == (int) h_trans*h_steps) {
+                    fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
+                    if (i == h_trans*h_spp) {
                         h_trigger = 1;
                         cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
                     }
@@ -1173,7 +1173,7 @@ int main(int argc, char **argv)
     //ensemble averaged trajectory <x>(t), <v>(t) and <x^2>(t), <v^2>(t)
     if (h_traj) {
         float t, sx, sv, sx2, sv2, dt, tmp, taua, taub;
-        int i;
+        long i;
 
         dt = 2.0f*PI/h_omega;
         tmp = dt;
@@ -1205,18 +1205,18 @@ int main(int argc, char **argv)
             ensemble_average(h_x, h_v, sx, sv, sx2, sv2);
             printf("%e %e %e %e %e\n", t, sx, sv, sx2, sv2);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
-            fold<<<h_grid, h_block>>>(d_w, d_fw, 2.0f*PI);
+            fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
         }
     }
 
     //the final position x and velocity v of all paths
     if (h_hist) {
-        int i;
+        long i;
 
         for (i = 0; i < h_steps; i += h_samples) {
             run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
-            fold<<<h_grid, h_block>>>(d_w, d_fw, 2.0f*PI);
+            fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
         }
         
         copy_from_dev();

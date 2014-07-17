@@ -18,14 +18,15 @@ mub = 0
 mean = 0
 
 #Simulation
-dev = 2
+dev = 3
 block = 64
 paths = 1024
 periods = 500 #1000 
 spp = 100
 algorithm = 'predcorr'
-trans = 0.1
-samples = 100
+frac = 0.1
+trans = int(frac*periods)
+samples = spp
 
 #Output
 mode = 'trajectory'

@@ -26,8 +26,9 @@ paths = 1024
 periods = 1000
 spp = 100
 algorithm= 'predcorr'
-trans = 0.1
-samples = 100
+frac = 0.1
+trans = int(frac*periods)
+samples = spp
 
 #Output
 mode = 'moments'

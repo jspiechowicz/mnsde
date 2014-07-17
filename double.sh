@@ -10,6 +10,7 @@ for i in $progs; do
             s/sinf/sin/g; 
             s/cosf/cos/g;
             s/floorf/floor/g;
+            s/fabsf/fabs/g;
             s/curand_uniform/curand_uniform_double/g;
             s/curandGenerateUniform/curandGenerateUniformDouble/g;
             s/0f/0/g;

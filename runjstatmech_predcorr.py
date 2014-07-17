@@ -18,14 +18,15 @@ mub = 0
 mean = 0
 
 #Simulation
-dev = 2
+dev = 1
 block = 64
 paths = 1024 #4096
 periods = 10000 #2000
-spp = 200
+spp = 100 #200
 algorithm = 'predcorr'
-trans = 0.1
-samples = 200
+frac = 0.1
+trans = int(frac*periods)
+samples = spp
 
 #Output
 mode = 'moments'
@@ -65,5 +66,5 @@ for lmd in [0.1, 4, 16]:
     output.close()
     print _cmd
     cmd = commands.getoutput(_cmd)
-
-#os.system('mv -vf fig*.dat fig*.png %s' % DIRNAME)
+os.system('gnuplot jstatmech_predcorr.plt')
+os.system('mv -vf fig*.dat fig*.png %s' % DIRNAME)

@@ -18,14 +18,15 @@ mub = 0
 mean = 0
 
 #Simulation
-dev = 2
+dev = 3
 block = 64
-paths = 4096
-periods = 2000 
-spp = 200
+paths = 1024 #4096
+periods = 10000 #2000 
+spp = 100 #200
 algorithm = 'predcorr'
-trans = 0.1
-samples = 200
+frac = 0.1
+trans = int(frac*periods)
+samples = spp
 
 #Output
 mode = 'moments'

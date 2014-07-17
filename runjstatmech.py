@@ -18,14 +18,15 @@ mub = 0
 mean = 0
 
 #Simulation
-dev = 2
+dev = 1
 block = 64
 paths = 1024 #4096
 periods = 10000 #2000
 spp = 800
 algorithm = 'euler'
-trans = 0.1
-samples = 800
+frac = 0.1
+trans = int(frac*periods)
+samples = spp/2
 
 #Output
 mode = 'moments'
