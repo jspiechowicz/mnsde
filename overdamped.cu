@@ -943,7 +943,6 @@ void finish()
     cudaFree(d_dst);
     cudaFree(d_states);
     
-    free(h_xb);
     free(h_dx);
 
     cudaFree(d_dx);
