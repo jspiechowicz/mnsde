@@ -101,8 +101,8 @@ void usage(char **argv)
     printf("Simulation params:\n");
     printf("    -i, --dev=INT           set the gpu device to INT\n");
     printf("    -j, --block=INT         set the gpu block size to INT\n");
-    printf("    -k, --paths=INT        set the number of paths to INT\n");
-    printf("    -l, --periods=INT      set the number of periods to INT\n");
+    printf("    -k, --paths=INT         set the number of paths to INT\n");
+    printf("    -l, --periods=INT       set the number of periods to INT\n");
     printf("    -m, --trans=FLOAT       specify fraction FLOAT of periods which stands for transients\n");
     printf("    -n, --spp=INT           specify how many integration steps should be calculated\n");
     printf("                            for a single period of the driving force\n");

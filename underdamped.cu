@@ -14,6 +14,7 @@
 #include <cuda.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <gsl/gsl_fft_real.h>
 
 #define PI 3.14159265358979f
 
@@ -24,22 +25,23 @@ float h_omega, h_lambda, h_fa, h_fb, h_mua, h_mub, h_mean;
 int h_comp;
 
 //simulation
-int h_dev, h_block, h_grid, h_spp, h_samples, h_2ndorder, h_trigger, h_initnoise, h_paths, h_periods, h_trans;
+int h_dev, h_block, h_grid, h_spp, h_samples, h_2ndorder, h_trigger, h_initnoise, h_paths, h_periods, h_trans, h_dump;
 long h_threads, h_steps;
-__constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths;
+__constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths, d_dump;
 
 //output
 char *h_domain;
 char h_domainx, h_domainy;
 float h_beginx, h_endx, h_beginy, h_endy;
-int h_logx, h_logy, h_points, h_moments, h_traj, h_hist;
+int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_spectrum;
 __constant__ char d_domainx;
-__constant__ int d_moments, d_points;
+__constant__ int d_moments, d_points, d_corr;
 
 //vector
-float *h_x, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx;
-float *d_x, *d_fx, *d_v, *d_w, *d_fw, *d_sv, *d_sv2, *d_dx;
-int *d_pcd, *d_dcd, *d_dst;
+float *h_x, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx, *h_vc;
+float *d_x, *d_fx, *d_v, *d_w, *d_fw, *d_sv, *d_sv2, *d_dx, *d_vc;
+int *h_pn;
+int *d_pcd, *d_dcd, *d_dst, *d_pn;
 unsigned int *h_seeds, *d_seeds;
 curandState *d_states;
 
@@ -79,7 +81,8 @@ static struct option options[] = {
     {"fa", required_argument, NULL, 'D'},
     {"fb", required_argument, NULL, 'E'},
     {"mua", required_argument, NULL, 'F'},
-    {"mub", required_argument, NULL, 'G'}
+    {"mub", required_argument, NULL, 'G'},
+    {"dump", required_argument, NULL, 'H'}
 };
 
 void usage(char **argv)
@@ -103,11 +106,10 @@ void usage(char **argv)
     printf("Simulation params:\n");
     printf("    -i, --dev=INT           set the gpu device to INT\n");
     printf("    -j, --block=INT         set the gpu block size to INT\n");
-    printf("    -k, --paths=INT        set the number of paths to INT\n");
-    printf("    -l, --periods=INT      set the number of periods to INT\n");
+    printf("    -k, --paths=INT         set the number of paths to INT\n");
+    printf("    -l, --periods=INT       set the number of periods to INT\n");
     printf("    -m, --trans=FLOAT       specify fraction FLOAT of periods which stands for transients\n");
-    printf("    -n, --spp=INT           specify how many integration steps should be calculated\n");
-    printf("                            for a single period of the driving force\n");
+    printf("    -n, --spp=INT           specify how many integration steps should be calculated for the smallest characteristic period of the system\n");
     printf("    -o, --samples=INT       specify how many integration steps should be calculated for a single kernel call\n");
     printf("    -p, --algorithm=STRING  sets the algorithm. STRING can be one of:\n");
     printf("                            predcorr: simplified weak order 2.0 adapted predictor-corrector\n");
@@ -115,21 +117,25 @@ void usage(char **argv)
     printf("Output params:\n");
     printf("    -q, --mode=STRING       sets the output mode. STRING can be one of:\n");
     printf("                            moments: the first two moments <<v>>, <<v^2>> and diffusion coefficient\n");
+    printf("                                -r, --domain=STRING     simultaneously scan over one or two model params. STRING can be one of:\n");
+    printf("                                                        1d: only one parameter; 2d: two parameters at once\n");
+    printf("                                -s, --domainx=CHAR      sets the first domain of the moments. CHAR can be one of:\n");
+    printf("                                                        a: amp; w: omega, f: force; g: gam; D: Dg; p: Dp; l: lambda; i: fa; j: fb; m: mua; n: mub\n");
+    printf("                                -t, --domainy=CHAR      sets the second domain of the moments (only if --domain=2d). CHAR can be the same as above.\n");
+    printf("                                -u, --logx=INT          choose between linear and logarithmic scale of the domainx\n");
+    printf("                                                        0: linear; 1: logarithmic\n");
+    printf("                                -v, --logy=INT          the same as above but for domainy\n");
+    printf("                                -w, --points=INT        set the number of samples to generate between begin and end\n");
+    printf("                                -y, --beginx=FLOAT      set the starting value of the domainx to FLOAT\n");
+    printf("                                -z, --endx=FLOAT        set the end value of the domainx to FLOAT\n");
+    printf("                                -A, --beginy=FLOAT      the same as --beginx, but for domainy\n");
+    printf("                                -B, --endy=FLOAT        the same as --endx, but for domainy\n");
     printf("                            trajectory: ensemble averaged <x>(t), <v>(t) and <x^2>(t), <v^2>(t)\n");
     printf("                            histogram: the final position x and velocity v of all paths\n");
-    printf("    -r, --domain=STRING     simultaneously scan over one or two model params. STRING can be one of:\n");
-    printf("                            1d: only one parameter; 2d: two parameters at once\n");
-    printf("    -s, --domainx=CHAR      sets the first domain of the moments. CHAR can be one of:\n");
-    printf("                            a: amp; w: omega, f: force; g: gam; D: Dg; p: Dp; l: lambda; i: fa; j: fb; m: mua; n: mub\n");
-    printf("    -t, --domainy=CHAR      sets the second domain of the moments (only if --domain=2d). CHAR can be the same as above.\n");
-    printf("    -u, --logx=INT          choose between linear and logarithmic scale of the domainx\n");
-    printf("                            0: linear; 1: logarithmic\n");
-    printf("    -v, --logy=INT          the same as above but for domainy\n");
-    printf("    -w, --points=INT        set the number of samples to generate between begin and end\n");
-    printf("    -y, --beginx=FLOAT      set the starting value of the domainx to FLOAT\n");
-    printf("    -z, --endx=FLOAT        set the end value of the domainx to FLOAT\n");
-    printf("    -A, --beginy=FLOAT      the same as --beginx, but for domainy\n");
-    printf("    -B, --endy=FLOAT        the same as --endx, but for domainy\n");
+    printf("                            correlation: velocity autocorrelation function <<v(t + \\tau)v(t)>>)\n");
+    printf("                                -w, --points=INT        set the number of saved instantaneous velocities v(t)\n");
+    printf("                                -H, --dump=INT          save the velocity of each particle every INT integration steps\n");
+    printf("                            spectrum: power spectrum S(\\omega)\n");
     printf("\n");
 }
 
@@ -139,7 +145,7 @@ void parse_cla(int argc, char **argv)
     float ftmp;
     int c, itmp;
 
-    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G", options, NULL)) != EOF) {
+    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H", options, NULL)) != EOF) {
         switch (c) {
             case 'a':
                 ftmp = atof(optarg);
@@ -210,16 +216,35 @@ void parse_cla(int argc, char **argv)
                     h_moments = 1;
                     h_traj = 0;
                     h_hist = 0;
+                    h_corr = 0;
+                    h_spectrum = 0;
                 } else if ( !strcmp(optarg, "trajectory") ) {
                     h_moments = 0;
                     h_traj = 1;
                     h_hist = 0;
+                    h_corr = 0;
+                    h_spectrum = 0;
                 } else if ( !strcmp(optarg, "histogram") ) {
                     h_moments = 0;
                     h_traj = 0;
                     h_hist = 1;
+                    h_corr = 0;
+                    h_spectrum = 0;
+                } else if ( !strcmp(optarg, "correlation") ) {
+                    h_moments = 0;
+                    h_traj = 0;
+                    h_hist = 0;
+                    h_corr = 1;
+                    h_spectrum = 0;
+                } else if ( !strcmp(optarg, "spectrum") ) {
+                    h_moments = 0;
+                    h_traj = 0;
+                    h_hist = 0;
+                    h_corr = 1;
+                    h_spectrum = 1;
                 }
                 cudaMemcpyToSymbol(d_moments, &h_moments, sizeof(int));
+                cudaMemcpyToSymbol(d_corr, &h_corr, sizeof(int));
                 break;
             case 'r':
                 h_domain = optarg;
@@ -272,6 +297,10 @@ void parse_cla(int argc, char **argv)
             case 'G':
                 h_mub = atof(optarg);
                 cudaMemcpyToSymbol(d_mub, &h_mub, sizeof(float));
+                break;
+            case 'H':
+                h_dump = atoi(optarg);
+                cudaMemcpyToSymbol(d_dump, &h_dump, sizeof(int));
                 break;
         }
     }
@@ -479,12 +508,14 @@ void unfold(float *x, float *fx)
 }
 
 //actual simulation kernel
-__global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *d_sv2, float *d_dx, int *d_pcd, int *d_dcd, int *d_dst, curandState *d_states)
+__global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *d_sv2, float *d_dx, int *d_pcd, int *d_dcd, int *d_dst, curandState *d_states, \
+                        float *d_vc, int *d_pn)
 {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     //cache path and model parameters in local variables
     float l_x, l_v, l_w, l_sv, l_sv2, l_dx; 
+    int l_pn;
     curandState l_state;
 
     l_x = d_x[idx];
@@ -493,10 +524,11 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_sv = d_sv[idx];
     l_sv2 = d_sv2[idx];
     l_state = d_states[idx];
+    l_pn = d_pn[idx];
 
     float l_amp, l_omega, l_force, l_gam, l_Dg, l_Dp, l_lambda, l_mean, l_fa, l_fb, l_mua, l_mub;
     int l_comp, l_2ndorder;
-    int l_moments;
+    int l_points, l_moments, l_corr;
 
     l_amp = d_amp;
     l_omega = d_omega;
@@ -513,10 +545,12 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_mub = d_mub;
     l_2ndorder = d_2ndorder;
     l_moments = d_moments;
+    l_corr = d_corr;
+    l_points = d_points;
    
     //run simulation for multiple values of the system parameters
     if (l_moments) {
-        long ridx = (idx/d_paths) % d_points;
+        long ridx = (idx/d_paths) % l_points;
         l_dx = d_dx[ridx];
 
         switch(d_domainx) {
@@ -619,9 +653,10 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_dt /= l_spp;
 
     //number of steps
-    int l_samples;
+    int l_samples, l_dump;
 
     l_samples = d_samples;
+    l_dump = d_dump;
 
     //jump countdowns
     int l_initnoise, l_pcd, l_dcd, l_dst;
@@ -682,6 +717,15 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
                     l_sv2 += l_v*l_v;
                 }
             }
+
+            if (l_corr) {
+                if (l_trigger) {
+                    if (i % l_dump == 0) {
+                        d_vc[idx*l_points + l_pn] = l_v;
+                        l_pn += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -695,6 +739,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     d_dcd[idx] = l_dcd;
     d_dst[idx] = l_dst;
     d_states[idx] = l_state;
+    d_pn[idx] = l_pn;
 }
 
 //prepare simulation
@@ -723,6 +768,8 @@ void prepare()
     h_w = (float*)malloc(size_f);
     h_fw = (float*)malloc(size_f);
     h_seeds = (unsigned int*)malloc(size_ui);
+    h_vc = (float*)malloc(h_paths*h_points*sizeof(float));
+    h_pn = (int*)malloc(size_i);
 
     //create & initialize host rng
     curandCreateGeneratorHost(&gen, CURAND_RNG_PSEUDO_DEFAULT);
@@ -741,6 +788,8 @@ void prepare()
     cudaMalloc((void**)&d_dst, size_i);
     cudaMalloc((void**)&d_seeds, size_ui);
     cudaMalloc((void**)&d_states, h_threads*sizeof(curandState));
+    cudaMalloc((void**)&d_vc, h_paths*h_points*sizeof(float));
+    cudaMalloc((void**)&d_pn, size_i);
 
     //copy seeds from host to device
     cudaMemcpy(d_seeds, h_seeds, size_ui, cudaMemcpyHostToDevice);
@@ -788,6 +837,9 @@ void copy_to_dev()
 
     cudaMemcpy(d_sv, h_sv, size_f, cudaMemcpyHostToDevice);
     cudaMemcpy(d_sv2, h_sv2, size_f, cudaMemcpyHostToDevice);
+
+    cudaMemcpy(d_vc, h_vc, h_paths*h_points*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_pn, h_pn, size_i, cudaMemcpyHostToDevice);
 }
 
 void copy_from_dev()
@@ -817,7 +869,53 @@ void initial_conditions()
     memset(h_sv, 0.0f, size_f);
     memset(h_sv2, 0.0f, size_f);
 
+    memset(h_vc, 0.0f, h_paths*h_points*sizeof(float));
+    memset(h_pn, 0, size_i);
+
     copy_to_dev();
+}
+
+//calculate the velocity autocorrelation function C(\\tau)
+void correlation(float *cf)
+{
+    float scf;
+    int i, j, k;
+
+    for (k = 0; k < h_points; k++) {
+        scf = 0.0f;
+        for (j = 0; j < h_paths; j++) {
+            for (i = 0; i < h_points - k; i++) {
+                scf += h_vc[j*h_points + i]*h_vc[j*h_points + i + k];
+            }
+        }
+        
+        scf /= h_paths*(h_points - k);
+        cf[k] = scf;
+    }
+}
+
+//calculate the power spectrum S(\\omega)
+void spectrum(float *cf, double *ps)
+{
+    int i;
+    gsl_fft_real_wavetable *wave;
+    gsl_fft_real_workspace *work;
+
+    for (i = 0; i < 2*h_points; i++) {
+        if (i < h_points) {
+            ps[i] = cf[i];
+        } else {
+            ps[i] = cf[h_points - (i % h_points)];
+        }
+    }
+
+    work = gsl_fft_real_workspace_alloc(2*h_points);
+    wave = gsl_fft_real_wavetable_alloc(2*h_points);
+
+    gsl_fft_real_transform(ps, 1, 2*h_points, wave, work);
+
+    gsl_fft_real_workspace_free(work);
+    gsl_fft_real_wavetable_free(wave);
 }
 
 //calculate the first two moments of <v> and diffusion coefficient
@@ -992,6 +1090,8 @@ void finish()
     free(h_v);
     free(h_w);
     free(h_fw);
+    free(h_vc);
+    free(h_pn);
     
     curandDestroyGenerator(gen);
     cudaFree(d_x);
@@ -1003,6 +1103,8 @@ void finish()
     cudaFree(d_dcd);
     cudaFree(d_dst);
     cudaFree(d_states);
+    cudaFree(d_vc);
+    cudaFree(d_pn);
     
     free(h_sv);
     free(h_sv2);
@@ -1016,7 +1118,7 @@ void finish()
 int main(int argc, char **argv)
 {
     parse_cla(argc, argv);
-    if (!h_moments && !h_traj && !h_hist) {
+    if (!h_moments && !h_traj && !h_hist && !h_corr) {
         usage(argv);
         return -1;
     }
@@ -1032,7 +1134,7 @@ int main(int argc, char **argv)
         h_initnoise = 1;
         cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-        run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
+        run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
         h_initnoise = 0;
         cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1053,7 +1155,7 @@ int main(int argc, char **argv)
             cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
             for (i = 0; i < h_steps; i += h_samples) {
-                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
+                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                 fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
                 fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
                 if (i == h_trans*h_spp) {
@@ -1131,7 +1233,7 @@ int main(int argc, char **argv)
                 cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
                 for (i = 0; i < h_steps; i += h_samples) {
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                     fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
                     fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
                     if (i == h_trans*h_spp) {
@@ -1155,7 +1257,7 @@ int main(int argc, char **argv)
                     h_initnoise = 1;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
                     h_initnoise = 0;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1198,7 +1300,7 @@ int main(int argc, char **argv)
         printf("#t <x> <v> <x^2> <v^2>\n");
         
         for (i = 0; i < h_steps; i += h_samples) {
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             copy_from_dev();
             unfold(h_x, h_fx);
             t = i*dt;
@@ -1214,7 +1316,7 @@ int main(int argc, char **argv)
         long i;
 
         for (i = 0; i < h_steps; i += h_samples) {
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
         }
@@ -1226,6 +1328,83 @@ int main(int argc, char **argv)
         for (i = 0; i < h_threads; i++) {
             printf("%e %e\n", h_x[i], h_v[i]); 
         }
+    }
+
+    //velocity autocorrelation function
+    if (h_corr) {
+        float dt, tmp, dtau, taua, taub, *cf;
+        long i;
+
+        h_trigger = 0;
+        cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+
+        for (i = 0; i < h_steps; i += h_samples) {
+            if (i == h_trans*h_spp) {
+                h_trigger = 1;
+                cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+            }
+
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+        }
+
+        cudaMemcpy(h_vc, d_vc, h_paths*h_points*sizeof(float), cudaMemcpyDeviceToHost);
+
+        cf = (float*)malloc(size_p);
+
+        correlation(cf);
+
+        dt = 2.0f*PI/h_omega;
+        tmp = dt;
+
+        if (h_lambda != 0.0f && h_2ndorder) tmp = 1.0f/h_lambda;
+
+        if (h_mua != 0.0f || h_mub != 0.0f) {
+            taua = 1.0f/h_mua;
+            taub = 1.0f/h_mub;
+
+            if (taua < taub) {
+                tmp = taua;
+            } else {
+                tmp = taub;
+            }
+        }
+
+        if (tmp < dt) dt = tmp;
+
+        dt /= h_spp;
+        dtau = h_dump*dt;
+
+        if (!h_spectrum) {
+            for (i = 0; i < h_points; i++) {
+                printf("%e %e\n", i*dtau, cf[i]);
+            }
+        }
+
+        //power spectrum
+        if (h_spectrum) {
+            double *ps;
+
+            ps = (double*)malloc(2*h_paths*h_points*sizeof(double));
+
+            spectrum(cf, ps);
+
+            float T;
+            T = 2*h_points*dtau;
+
+            int j;
+            j = 0;
+
+            for (i = 0; i < h_points; i++) {
+                if (i == 0 || i % 2 != 0) {
+                    printf("%e %e\n", j*(2.0f*PI)/T, dtau*ps[i]);
+                    j++;
+                }
+            }
+
+            free(ps);
+        }
+
+        free(cf);
     }
 
     finish();

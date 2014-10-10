@@ -21,6 +21,7 @@
  *  - asymptotic long time average velocity <<v>>, <<v^2>> and diffusion coefficient
  *  - ensemble averaged trajectory <x>(t), <v>(t) and <x^2>(t), <v^2>(t)
  *  - the final position x and velocity v of all paths for histogram generation
+ *  - velocity correlation function and its power spectrum
  *  - avoidance of the run time limit on kernels by splitting the main kernel into smaller parts
  *  - path parameters folding for utilization of single precision arithmetics
  *  - scan over multiple values of the system parameters in a single kernel call
@@ -28,7 +29,6 @@
  *
  * TO DO:
  *
- *  - more output modes (correlation function and power spectrum)
  *  - different Poissonian kicks amplitude distribution
  *  - recode command line parsing for use of less options
  *
