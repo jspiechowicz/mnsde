@@ -32,10 +32,10 @@ __constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths, 
 //output
 char *h_domain;
 char h_domainx, h_domainy;
-float h_beginx, h_endx, h_beginy, h_endy;
-int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_spectrum;
+float h_beginx, h_endx, h_beginy, h_endy, h_tau;
+int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum;
 __constant__ char d_domainx;
-__constant__ int d_moments, d_points, d_corr;
+__constant__ int d_moments, d_points, d_corr, d_vs;
 
 //vector
 float *h_x, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx, *h_vc;
@@ -82,7 +82,9 @@ static struct option options[] = {
     {"fb", required_argument, NULL, 'E'},
     {"mua", required_argument, NULL, 'F'},
     {"mub", required_argument, NULL, 'G'},
-    {"dump", required_argument, NULL, 'H'}
+    {"vs", required_argument, NULL, 'H'},
+    {"dump", required_argument, NULL, 'I'},
+    {"tau", required_argument, NULL, 'J'}
 };
 
 void usage(char **argv)
@@ -133,8 +135,10 @@ void usage(char **argv)
     printf("                            trajectory: ensemble averaged <x>(t), <v>(t) and <x^2>(t), <v^2>(t)\n");
     printf("                            histogram: the final position x and velocity v of all paths\n");
     printf("                            correlation: velocity autocorrelation function <<v(t + \\tau)v(t)>>)\n");
-    printf("                                -w, --points=INT        set the number of saved instantaneous velocities v(t)\n");
-    printf("                                -H, --dump=INT          save the velocity of each particle every INT integration steps\n");
+    printf("                                -H, --vs=INT            set the number of saved instantaneous velocities v(t)\n");
+    printf("                                -I, --dump=INT          save the velocity of each particle every INT integration steps\n");
+    printf("                                -J, --tau=FLOAT         if is nonzero, calculate velocity autocorrelation function for a fixed '\\tau'\n");
+    printf("                                                        and multiple values of model param determined by --domainx=CHAR\n");
     printf("                            spectrum: power spectrum S(\\omega)\n");
     printf("\n");
 }
@@ -299,8 +303,15 @@ void parse_cla(int argc, char **argv)
                 cudaMemcpyToSymbol(d_mub, &h_mub, sizeof(float));
                 break;
             case 'H':
+                h_vs = atoi(optarg);
+                cudaMemcpyToSymbol(d_vs, &h_vs, sizeof(int));
+                break;
+            case 'I':
                 h_dump = atoi(optarg);
                 cudaMemcpyToSymbol(d_dump, &h_dump, sizeof(int));
+                break;
+            case 'J':
+                h_tau = atof(optarg);
                 break;
         }
     }
@@ -528,7 +539,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
 
     float l_amp, l_omega, l_force, l_gam, l_Dg, l_Dp, l_lambda, l_mean, l_fa, l_fb, l_mua, l_mub;
     int l_comp, l_2ndorder;
-    int l_points, l_moments, l_corr;
+    int l_points, l_moments, l_corr, l_vs;
 
     l_amp = d_amp;
     l_omega = d_omega;
@@ -547,6 +558,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_moments = d_moments;
     l_corr = d_corr;
     l_points = d_points;
+    l_vs = d_vs;
    
     //run simulation for multiple values of the system parameters
     if (l_moments) {
@@ -721,7 +733,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
             if (l_corr) {
                 if (l_trigger) {
                     if (i % l_dump == 0) {
-                        d_vc[idx*l_points + l_pn] = l_v;
+                        d_vc[idx*l_vs + l_pn] = l_v;
                         l_pn += 1;
                     }
                 }
@@ -768,7 +780,7 @@ void prepare()
     h_w = (float*)malloc(size_f);
     h_fw = (float*)malloc(size_f);
     h_seeds = (unsigned int*)malloc(size_ui);
-    h_vc = (float*)malloc(h_paths*h_points*sizeof(float));
+    h_vc = (float*)malloc(h_paths*h_vs*sizeof(float));
     h_pn = (int*)malloc(size_i);
 
     //create & initialize host rng
@@ -788,7 +800,7 @@ void prepare()
     cudaMalloc((void**)&d_dst, size_i);
     cudaMalloc((void**)&d_seeds, size_ui);
     cudaMalloc((void**)&d_states, h_threads*sizeof(curandState));
-    cudaMalloc((void**)&d_vc, h_paths*h_points*sizeof(float));
+    cudaMalloc((void**)&d_vc, h_paths*h_vs*sizeof(float));
     cudaMalloc((void**)&d_pn, size_i);
 
     //copy seeds from host to device
@@ -838,7 +850,7 @@ void copy_to_dev()
     cudaMemcpy(d_sv, h_sv, size_f, cudaMemcpyHostToDevice);
     cudaMemcpy(d_sv2, h_sv2, size_f, cudaMemcpyHostToDevice);
 
-    cudaMemcpy(d_vc, h_vc, h_paths*h_points*sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_vc, h_vc, h_paths*h_vs*sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_pn, h_pn, size_i, cudaMemcpyHostToDevice);
 }
 
@@ -869,28 +881,40 @@ void initial_conditions()
     memset(h_sv, 0.0f, size_f);
     memset(h_sv2, 0.0f, size_f);
 
-    memset(h_vc, 0.0f, h_paths*h_points*sizeof(float));
+    memset(h_vc, 0.0f, h_paths*h_vs*sizeof(float));
     memset(h_pn, 0, size_i);
 
     copy_to_dev();
 }
 
 //calculate the velocity autocorrelation function C(\\tau)
-void correlation(float *cf)
+void correlation(float *cf, int n)
 {
     float scf;
     int i, j, k;
 
-    for (k = 0; k < h_points; k++) {
+    if (n == 0) {
+        for (k = 0; k < h_vs; k++) {
+            scf = 0.0f;
+            for (j = 0; j < h_paths; j++) {
+                for (i = 0; i < h_vs - k; i++) {
+                    scf += h_vc[j*h_vs + i]*h_vc[j*h_vs + i + k];
+                }
+            }
+        
+            scf /= h_paths*(h_vs - k);
+            cf[k] = scf;
+        }
+    } else {
         scf = 0.0f;
         for (j = 0; j < h_paths; j++) {
-            for (i = 0; i < h_points - k; i++) {
-                scf += h_vc[j*h_points + i]*h_vc[j*h_points + i + k];
+            for (i = 0; i < h_vs - n; i++) {
+                scf += h_vc[j*h_vs + i]*h_vc[j*h_vs + i + n];
             }
         }
         
-        scf /= h_paths*(h_points - k);
-        cf[k] = scf;
+        scf /= h_paths*(h_vs - n);
+        cf[0] = scf;
     }
 }
 
@@ -901,18 +925,18 @@ void spectrum(float *cf, double *ps)
     gsl_fft_real_wavetable *wave;
     gsl_fft_real_workspace *work;
 
-    for (i = 0; i < 2*h_points; i++) {
-        if (i < h_points) {
+    for (i = 0; i < 2*h_vs; i++) {
+        if (i < h_vs) {
             ps[i] = cf[i];
         } else {
-            ps[i] = cf[h_points - (i % h_points)];
+            ps[i] = cf[h_vs - (i % h_vs)];
         }
     }
 
-    work = gsl_fft_real_workspace_alloc(2*h_points);
-    wave = gsl_fft_real_wavetable_alloc(2*h_points);
+    work = gsl_fft_real_workspace_alloc(2*h_vs);
+    wave = gsl_fft_real_wavetable_alloc(2*h_vs);
 
-    gsl_fft_real_transform(ps, 1, 2*h_points, wave, work);
+    gsl_fft_real_transform(ps, 1, 2*h_vs, wave, work);
 
     gsl_fft_real_workspace_free(work);
     gsl_fft_real_wavetable_free(wave);
@@ -1333,75 +1357,195 @@ int main(int argc, char **argv)
     //velocity autocorrelation function
     if (h_corr) {
         float dt, tmp, dtau, taua, taub, *cf;
+        int n;
         long i;
 
-        h_trigger = 0;
-        cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+        cf = (float*)malloc(h_vs*sizeof(float));
 
-        for (i = 0; i < h_steps; i += h_samples) {
-            if (i == h_trans*h_spp) {
-                h_trigger = 1;
-                cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+        if (h_tau == 0) {
+            n = 0;
+            h_trigger = 0;
+            cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+
+            for (i = 0; i < h_steps; i += h_samples) {
+                if (i == h_trans*h_spp) {
+                    h_trigger = 1;
+                    cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+                }
+
+                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             }
 
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
-        }
+            cudaMemcpy(h_vc, d_vc, h_paths*h_vs*sizeof(float), cudaMemcpyDeviceToHost);
 
-        cudaMemcpy(h_vc, d_vc, h_paths*h_points*sizeof(float), cudaMemcpyDeviceToHost);
+            correlation(cf, n);
 
-        cf = (float*)malloc(size_p);
+            dt = 2.0f*PI/h_omega;
+            tmp = dt;
 
-        correlation(cf);
+            if (h_lambda != 0.0f && h_2ndorder) tmp = 1.0f/h_lambda;
 
-        dt = 2.0f*PI/h_omega;
-        tmp = dt;
+            if (h_mua != 0.0f || h_mub != 0.0f) {
+                taua = 1.0f/h_mua;
+                taub = 1.0f/h_mub;
 
-        if (h_lambda != 0.0f && h_2ndorder) tmp = 1.0f/h_lambda;
-
-        if (h_mua != 0.0f || h_mub != 0.0f) {
-            taua = 1.0f/h_mua;
-            taub = 1.0f/h_mub;
-
-            if (taua < taub) {
-                tmp = taua;
-            } else {
-                tmp = taub;
-            }
-        }
-
-        if (tmp < dt) dt = tmp;
-
-        dt /= h_spp;
-        dtau = h_dump*dt;
-
-        if (!h_spectrum) {
-            for (i = 0; i < h_points; i++) {
-                printf("%e %e\n", i*dtau, cf[i]);
-            }
-        }
-
-        //power spectrum
-        if (h_spectrum) {
-            double *ps;
-
-            ps = (double*)malloc(2*h_paths*h_points*sizeof(double));
-
-            spectrum(cf, ps);
-
-            float T;
-            T = 2*h_points*dtau;
-
-            int j;
-            j = 0;
-
-            for (i = 0; i < h_points; i++) {
-                if (i == 0 || i % 2 != 0) {
-                    printf("%e %e\n", j*(2.0f*PI)/T, dtau*ps[i]);
-                    j++;
+                if (taua < taub) {
+                    tmp = taua;
+                } else {
+                    tmp = taub;
                 }
             }
 
-            free(ps);
+            if (tmp < dt) dt = tmp;
+
+            dt /= h_spp;
+            dtau = h_dump*dt;
+
+            if (!h_spectrum) {
+                printf("#t C\n");
+                for (i = 0; i < h_vs; i++) {
+                    printf("%e %e\n", i*dtau, cf[i]);
+                }
+            }
+
+            //power spectrum
+            if (h_spectrum) {
+                double *ps;
+
+                printf("#w S\n");
+
+                ps = (double*)malloc(2*h_paths*h_vs*sizeof(double));
+
+                spectrum(cf, ps);
+
+                float T;
+                T = 2*h_vs*dtau;
+
+                int j;
+                j = 0;
+
+                for (i = 0; i < h_vs; i++) {
+                    if (i == 0 || i % 2 != 0) {
+                        printf("%e %e\n", j*(2.0f*PI)/T, dtau*ps[i]);
+                        j++;
+                    }
+                }
+
+                free(ps);
+            }
+        
+        } else {
+            float h_dx, dxtmp, dxstep;
+            int k;
+
+            printf("#%c C\n", h_domainx);
+            
+            dxtmp = h_beginx;
+            dxstep = (h_endx - h_beginx)/h_points;
+            
+            for (k = 0; k < h_points; k++) {
+                if (h_logx) {
+                    h_dx = exp10f(dxtmp);
+                } else {
+                    h_dx = dxtmp;
+                }
+
+                switch(h_domainx) {
+                    case 'a':
+                        cudaMemcpyToSymbol(d_amp, &h_dx, sizeof(float));
+                        break;
+                    case 'w':
+                        h_omega = h_dx;
+                        cudaMemcpyToSymbol(d_omega, &h_omega, sizeof(float));
+                        break;
+                    case 'f':
+                        cudaMemcpyToSymbol(d_force, &h_dx, sizeof(float));
+                        break;
+                    case 'g':
+                        cudaMemcpyToSymbol(d_gam, &h_dx, sizeof(float));
+                        break;
+                    case 'D':
+                        cudaMemcpyToSymbol(d_Dg, &h_dx, sizeof(float));
+                        break;
+                    case 'p':
+                        cudaMemcpyToSymbol(d_Dp, &h_dx, sizeof(float));
+                        break;
+                    case 'l':
+                        h_lambda = h_dx;
+                        cudaMemcpyToSymbol(d_lambda, &h_lambda, sizeof(float));
+                        break;
+                    case 'i':
+                        h_fa = h_dx;
+                        cudaMemcpyToSymbol(d_fa, &h_fa, sizeof(float));
+                        break;
+                    case 'j':
+                        h_fb = h_dx;
+                        cudaMemcpyToSymbol(d_fb, &h_fb, sizeof(float));
+                        break;
+                    case 'm':
+                        h_mua = h_dx;
+                        cudaMemcpyToSymbol(d_mua, &h_mua, sizeof(float));
+                        break;
+                    case 'n':
+                        h_mub = h_dx;
+                        cudaMemcpyToSymbol(d_mub, &h_mub, sizeof(float));
+                        break;
+                }
+
+                dt = 2.0f*PI/h_omega;
+                tmp = dt;
+
+                if (h_lambda != 0.0f && h_2ndorder) tmp = 1.0f/h_lambda;
+
+                if (h_mua != 0.0f || h_mub != 0.0f) {
+                    taua = 1.0f/h_mua;
+                    taub = 1.0f/h_mub;
+
+                    if (taua < taub) {
+                        tmp = taua;
+                    } else {
+                        tmp = taub;
+                    }
+                }
+
+                if (tmp < dt) dt = tmp;
+
+                dt /= h_spp;
+                dtau = h_dump*dt;
+                n = (int) floorf(h_tau/dtau);
+
+                h_trigger = 0;
+                cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+
+                for (i = 0; i < h_steps; i += h_samples) {
+                    if (i == h_trans*h_spp) {
+                        h_trigger = 1;
+                        cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+                    }
+
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                }
+
+                cudaMemcpy(h_vc, d_vc, h_paths*h_vs*sizeof(float), cudaMemcpyDeviceToHost);
+
+                correlation(cf, n);
+
+                printf("%e %e\n", h_dx, cf[0]);
+
+                initial_conditions();
+
+                if ( (h_lambda != 0.0f && h_2ndorder) || (h_mua != 0.0f || h_mub != 0.0f) ) {
+                    h_initnoise = 1;
+                    cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
+
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+
+                    h_initnoise = 0;
+                    cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
+                }
+
+                dxtmp += dxstep;
+            }
         }
 
         free(cf);
