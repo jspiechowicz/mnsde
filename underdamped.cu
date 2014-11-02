@@ -592,20 +592,20 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
             case 'i':
                 l_fa = l_dx;
                 if (l_comp == 1) {
-                    l_mua = fabsf(l_fa*l_mub/l_fb);
+                    l_mua = -l_fa*l_mub/l_fb;
                     //l_fb = -l_fa*l_mub/l_mua;
                 } else if (l_mean != 0.0f) {
-                    l_mua = fabsf((l_fa - l_mean)*l_mub/(l_mean - l_fb));
+                    l_mua = (l_fa - l_mean)*l_mub/(l_mean - l_fb);
                     //l_fb = (l_mean*(l_mua + l_mub) - l_fa*l_mub)/l_mua;
                 }
                 break;
             case 'j':
                 l_fb = l_dx;
                 if (l_comp == 1) {
-                    l_mub = fabsf(l_fb*l_mua/l_fa);
+                    l_mub = -l_fb*l_mua/l_fa;
                     //l_fa = -l_fb*l_mua/l_mub;
                 } else if (l_mean != 0.0f) {
-                    l_mub = fabsf((l_fb - l_mean)*l_mua/(l_mean - l_fa));
+                    l_mub = (l_fb - l_mean)*l_mua/(l_mean - l_fa);
                     //l_fa = (l_mean*(l_mua + l_mub) - l_fb*l_mua)/l_mub;
                 }
                 break;
