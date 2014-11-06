@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-progs='underdamped overdamped'
+progs='underdamped munderdamped overdamped'
 
 for i in $progs; do
     sed -e 's/float/double/g;
