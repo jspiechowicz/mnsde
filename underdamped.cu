@@ -33,7 +33,7 @@ __constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths, 
 char *h_domain;
 char h_domainx, h_domainy;
 float h_beginx, h_endx, h_beginy, h_endy, h_tau;
-int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum;
+int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum, h_bif;
 __constant__ char d_domainx;
 __constant__ int d_moments, d_points, d_corr, d_vs;
 
@@ -132,6 +132,7 @@ void usage(char **argv)
     printf("                                -z, --endx=FLOAT        set the end value of the domainx to FLOAT\n");
     printf("                                -A, --beginy=FLOAT      the same as --beginx, but for domainy\n");
     printf("                                -B, --endy=FLOAT        the same as --endx, but for domainy\n");
+    printf("                            bifurcation: velocity bifurcation diagram\n");
     printf("                            trajectory: ensemble averaged <x>(t), <v>(t) and <x^2>(t), <v^2>(t)\n");
     printf("                            histogram: the final position x and velocity v of all paths\n");
     printf("                            correlation: velocity autocorrelation function <<v(t + \\tau)v(t)>>)\n");
@@ -222,30 +223,42 @@ void parse_cla(int argc, char **argv)
                     h_hist = 0;
                     h_corr = 0;
                     h_spectrum = 0;
+                    h_bif = 0;
                 } else if ( !strcmp(optarg, "trajectory") ) {
                     h_moments = 0;
                     h_traj = 1;
                     h_hist = 0;
                     h_corr = 0;
                     h_spectrum = 0;
+                    h_bif = 0;
                 } else if ( !strcmp(optarg, "histogram") ) {
                     h_moments = 0;
                     h_traj = 0;
                     h_hist = 1;
                     h_corr = 0;
                     h_spectrum = 0;
+                    h_bif = 0;
                 } else if ( !strcmp(optarg, "correlation") ) {
                     h_moments = 0;
                     h_traj = 0;
                     h_hist = 0;
                     h_corr = 1;
                     h_spectrum = 0;
+                    h_bif = 0;
                 } else if ( !strcmp(optarg, "spectrum") ) {
                     h_moments = 0;
                     h_traj = 0;
                     h_hist = 0;
                     h_corr = 1;
                     h_spectrum = 1;
+                    h_bif = 0;
+                } else if ( !strcmp(optarg, "bifurcation") ) {
+                    h_moments = 0;
+                    h_traj = 0;
+                    h_hist = 0;
+                    h_corr = 0;
+                    h_spectrum = 0;
+                    h_bif = 1;
                 }
                 cudaMemcpyToSymbol(d_moments, &h_moments, sizeof(int));
                 cudaMemcpyToSymbol(d_corr, &h_corr, sizeof(int));
@@ -761,7 +774,7 @@ void prepare()
     h_paths = (h_paths/h_block)*h_block;
     h_threads = h_paths;
 
-    if (h_moments) h_threads *= h_points;
+    if (h_moments || h_bif) h_threads *= h_points;
 
     h_grid = h_threads/h_block;
 
@@ -1142,7 +1155,7 @@ void finish()
 int main(int argc, char **argv)
 {
     parse_cla(argc, argv);
-    if (!h_moments && !h_traj && !h_hist && !h_corr) {
+    if (!h_moments && !h_traj && !h_hist && !h_corr && !h_bif) {
         usage(argv);
         return -1;
     }
@@ -1549,6 +1562,27 @@ int main(int argc, char **argv)
         }
 
         free(cf);
+    }
+
+    //bifurcation diagram
+    if (h_bif) {
+        long i, j;
+
+        printf("#%c v\n", h_domainx);
+
+        for (i = 0; i < h_steps; i += h_samples) {
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
+            fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
+        }
+
+        copy_from_dev();
+        
+        for (j = 0; j < h_points; j++) {
+            for (i = 0; i < h_paths; i++) {
+                printf("%e %e\n", h_dx[j], h_v[j*h_paths + i]);
+            }
+        }
     }
 
     finish();
