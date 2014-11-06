@@ -33,9 +33,9 @@ __constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths, 
 char *h_domain;
 char h_domainx, h_domainy;
 float h_beginx, h_endx, h_beginy, h_endy, h_tau;
-int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum, h_bif;
+int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum, h_bif, h_basin;
 __constant__ char d_domainx;
-__constant__ int d_moments, d_points, d_corr, d_vs;
+__constant__ int d_moments, d_points, d_corr, d_vs, d_bif;
 
 //vector
 float *h_x, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx, *h_vc;
@@ -119,11 +119,12 @@ void usage(char **argv)
     printf("Output params:\n");
     printf("    -q, --mode=STRING       sets the output mode. STRING can be one of:\n");
     printf("                            moments: the first two moments <<v>>, <<v^2>> and diffusion coefficient\n");
+    printf("                            bifurcation: velocity bifurcation diagram\n");
     printf("                                -r, --domain=STRING     simultaneously scan over one or two model params. STRING can be one of:\n");
     printf("                                                        1d: only one parameter; 2d: two parameters at once\n");
-    printf("                                -s, --domainx=CHAR      sets the first domain of the moments. CHAR can be one of:\n");
+    printf("                                -s, --domainx=CHAR      sets the first domain of the model. CHAR can be one of:\n");
     printf("                                                        a: amp; w: omega, f: force; g: gam; D: Dg; p: Dp; l: lambda; i: fa; j: fb; m: mua; n: mub\n");
-    printf("                                -t, --domainy=CHAR      sets the second domain of the moments (only if --domain=2d). CHAR can be the same as above.\n");
+    printf("                                -t, --domainy=CHAR      sets the second domain of the model (works only for moments mode and with --domain=2d). CHAR can be the same as above.\n");
     printf("                                -u, --logx=INT          choose between linear and logarithmic scale of the domainx\n");
     printf("                                                        0: linear; 1: logarithmic\n");
     printf("                                -v, --logy=INT          the same as above but for domainy\n");
@@ -132,7 +133,6 @@ void usage(char **argv)
     printf("                                -z, --endx=FLOAT        set the end value of the domainx to FLOAT\n");
     printf("                                -A, --beginy=FLOAT      the same as --beginx, but for domainy\n");
     printf("                                -B, --endy=FLOAT        the same as --endx, but for domainy\n");
-    printf("                            bifurcation: velocity bifurcation diagram\n");
     printf("                            trajectory: ensemble averaged <x>(t), <v>(t) and <x^2>(t), <v^2>(t)\n");
     printf("                            histogram: the final position x and velocity v of all paths\n");
     printf("                            correlation: velocity autocorrelation function <<v(t + \\tau)v(t)>>)\n");
@@ -141,6 +141,7 @@ void usage(char **argv)
     printf("                                -J, --tau=FLOAT         if is nonzero, calculate velocity autocorrelation function for a fixed '\\tau'\n");
     printf("                                                        and multiple values of model param determined by --domainx=CHAR\n");
     printf("                            spectrum: power spectrum S(\\omega)\n");
+    printf("                            basin: basins of position and velocity attraction\n");
     printf("\n");
 }
 
@@ -224,6 +225,7 @@ void parse_cla(int argc, char **argv)
                     h_corr = 0;
                     h_spectrum = 0;
                     h_bif = 0;
+                    h_basin = 0;
                 } else if ( !strcmp(optarg, "trajectory") ) {
                     h_moments = 0;
                     h_traj = 1;
@@ -231,6 +233,7 @@ void parse_cla(int argc, char **argv)
                     h_corr = 0;
                     h_spectrum = 0;
                     h_bif = 0;
+                    h_basin = 0;
                 } else if ( !strcmp(optarg, "histogram") ) {
                     h_moments = 0;
                     h_traj = 0;
@@ -238,6 +241,7 @@ void parse_cla(int argc, char **argv)
                     h_corr = 0;
                     h_spectrum = 0;
                     h_bif = 0;
+                    h_basin = 0;
                 } else if ( !strcmp(optarg, "correlation") ) {
                     h_moments = 0;
                     h_traj = 0;
@@ -245,6 +249,7 @@ void parse_cla(int argc, char **argv)
                     h_corr = 1;
                     h_spectrum = 0;
                     h_bif = 0;
+                    h_basin = 0;
                 } else if ( !strcmp(optarg, "spectrum") ) {
                     h_moments = 0;
                     h_traj = 0;
@@ -252,6 +257,7 @@ void parse_cla(int argc, char **argv)
                     h_corr = 1;
                     h_spectrum = 1;
                     h_bif = 0;
+                    h_basin = 0;
                 } else if ( !strcmp(optarg, "bifurcation") ) {
                     h_moments = 0;
                     h_traj = 0;
@@ -259,9 +265,19 @@ void parse_cla(int argc, char **argv)
                     h_corr = 0;
                     h_spectrum = 0;
                     h_bif = 1;
+                    h_basin = 0;
+                } else if ( !strcmp(optarg, "basin") ) {
+                    h_moments = 0;
+                    h_traj = 0;
+                    h_hist = 1;
+                    h_corr = 0;
+                    h_spectrum = 0;
+                    h_bif = 0;
+                    h_basin = 1;
                 }
                 cudaMemcpyToSymbol(d_moments, &h_moments, sizeof(int));
                 cudaMemcpyToSymbol(d_corr, &h_corr, sizeof(int));
+                cudaMemcpyToSymbol(d_bif, &h_bif, sizeof(int));
                 break;
             case 'r':
                 h_domain = optarg;
@@ -552,7 +568,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
 
     float l_amp, l_omega, l_force, l_gam, l_Dg, l_Dp, l_lambda, l_mean, l_fa, l_fb, l_mua, l_mub;
     int l_comp, l_2ndorder;
-    int l_points, l_moments, l_corr, l_vs;
+    int l_points, l_moments, l_corr, l_vs, l_bif;
 
     l_amp = d_amp;
     l_omega = d_omega;
@@ -572,9 +588,10 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_corr = d_corr;
     l_points = d_points;
     l_vs = d_vs;
+    l_bif = d_bif;
    
     //run simulation for multiple values of the system parameters
-    if (l_moments) {
+    if (l_moments || l_bif) {
         long ridx = (idx/d_paths) % l_points;
         l_dx = d_dx[ridx];
 
@@ -1337,12 +1354,14 @@ int main(int argc, char **argv)
         printf("#t <x> <v> <x^2> <v^2>\n");
         
         for (i = 0; i < h_steps; i += h_samples) {
+            if (i >= h_trans*h_spp) {
+                copy_from_dev();
+                unfold(h_x, h_fx);
+                t = i*dt;
+                ensemble_average(h_x, h_v, sx, sv, sx2, sv2);
+                printf("%e %e %e %e %e\n", t, sx, sv, sx2, sv2);
+            }
             run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
-            copy_from_dev();
-            unfold(h_x, h_fx);
-            t = i*dt;
-            ensemble_average(h_x, h_v, sx, sv, sx2, sv2);
-            printf("%e %e %e %e %e\n", t, sx, sv, sx2, sv2);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
         }
@@ -1351,6 +1370,18 @@ int main(int argc, char **argv)
     //the final position x and velocity v of all paths
     if (h_hist) {
         long i;
+        float *h_x0, *h_v0, *h_w0;
+
+        //basins of position and velocity attraction
+        if (h_basin) {
+            h_x0 = (float*)malloc(size_f);
+            h_v0 = (float*)malloc(size_f);
+            h_w0 = (float*)malloc(size_f);
+
+            memcpy(h_x0, h_x, size_f);
+            memcpy(h_v0, h_v, size_f);
+            memcpy(h_w0, h_w, size_f);
+        }
 
         for (i = 0; i < h_steps; i += h_samples) {
             run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
@@ -1360,11 +1391,23 @@ int main(int argc, char **argv)
         
         copy_from_dev();
 
-        printf("#x v\n");
+        if (h_basin) {
+            printf("#x0 v0 x v\n");
+    
+            for (i = 0; i < h_threads; i++) {
+                printf("%e %e %e %e\n", h_x0[i], h_v0[i], h_x[i], h_v[i]); 
+            }
+        } else {
+            printf("#x v\n");
         
-        for (i = 0; i < h_threads; i++) {
-            printf("%e %e\n", h_x[i], h_v[i]); 
+            for (i = 0; i < h_threads; i++) {
+                printf("%e %e\n", h_x[i], h_v[i]); 
+            }
         }
+
+        free(h_x0);
+        free(h_v0);
+        free(h_w0);
     }
 
     //velocity autocorrelation function
@@ -1564,7 +1607,7 @@ int main(int argc, char **argv)
         free(cf);
     }
 
-    //bifurcation diagram
+    //velocity bifurcation diagram
     if (h_bif) {
         long i, j;
 
