@@ -151,7 +151,7 @@ void parse_cla(int argc, char **argv)
     float ftmp;
     int c, itmp;
 
-    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H", options, NULL)) != EOF) {
+    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H:I:J", options, NULL)) != EOF) {
         switch (c) {
             case 'a':
                 ftmp = atof(optarg);
@@ -1390,6 +1390,7 @@ int main(int argc, char **argv)
         }
         
         copy_from_dev();
+        unfold(h_x, h_fx);
 
         if (h_basin) {
             printf("#x0 v0 x v\n");
