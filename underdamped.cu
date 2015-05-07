@@ -25,7 +25,7 @@ float h_omega, h_lambda, h_fa, h_fb, h_mua, h_mub, h_mean;
 int h_comp;
 
 //simulation
-int h_dev, h_block, h_grid, h_spp, h_samples, h_2ndorder, h_trigger, h_initnoise, h_paths, h_periods, h_trans, h_dump;
+int h_dev, h_block, h_grid, h_spp, h_samples, h_2ndorder, h_trigger, h_initnoise, h_paths, h_periods, h_trans, h_dump, h_av;
 long h_threads, h_steps;
 __constant__ int d_spp, d_2ndorder, d_samples, d_trigger, d_initnoise, d_paths, d_dump;
 
@@ -35,7 +35,7 @@ char h_domainx, h_domainy;
 float h_beginx, h_endx, h_beginy, h_endy, h_tau;
 int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum, h_bif, h_basin;
 __constant__ char d_domainx;
-__constant__ int d_moments, d_points, d_corr, d_vs, d_bif;
+__constant__ int d_moments, d_points, d_corr, d_vs, d_bif, d_basin;
 
 //vector
 float *h_x, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx, *h_vc;
@@ -84,7 +84,8 @@ static struct option options[] = {
     {"mub", required_argument, NULL, 'G'},
     {"vs", required_argument, NULL, 'H'},
     {"dump", required_argument, NULL, 'I'},
-    {"tau", required_argument, NULL, 'J'}
+    {"tau", required_argument, NULL, 'J'},
+    {"av", required_argument, NULL, 'K'}
 };
 
 void usage(char **argv)
@@ -116,6 +117,7 @@ void usage(char **argv)
     printf("    -p, --algorithm=STRING  sets the algorithm. STRING can be one of:\n");
     printf("                            predcorr: simplified weak order 2.0 adapted predictor-corrector\n");
     printf("                            euler: simplified weak order 1.0 regular euler-maruyama\n");
+    printf("    -K, --av=INT            if is 1 then additional average over initial phase of driving is performed\n");
     printf("Output params:\n");
     printf("    -q, --mode=STRING       sets the output mode. STRING can be one of:\n");
     printf("                            moments: the first two moments <<v>>, <<v^2>> and diffusion coefficient\n");
@@ -151,7 +153,7 @@ void parse_cla(int argc, char **argv)
     float ftmp;
     int c, itmp;
 
-    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H:I:J", options, NULL)) != EOF) {
+    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H:I:J:K", options, NULL)) != EOF) {
         switch (c) {
             case 'a':
                 ftmp = atof(optarg);
@@ -278,6 +280,7 @@ void parse_cla(int argc, char **argv)
                 cudaMemcpyToSymbol(d_moments, &h_moments, sizeof(int));
                 cudaMemcpyToSymbol(d_corr, &h_corr, sizeof(int));
                 cudaMemcpyToSymbol(d_bif, &h_bif, sizeof(int));
+                cudaMemcpyToSymbol(d_basin, &h_basin, sizeof(int));
                 break;
             case 'r':
                 h_domain = optarg;
@@ -341,6 +344,9 @@ void parse_cla(int argc, char **argv)
                 break;
             case 'J':
                 h_tau = atof(optarg);
+                break;
+            case 'K':
+                h_av = atoi(optarg);
                 break;
         }
     }
@@ -568,7 +574,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
 
     float l_amp, l_omega, l_force, l_gam, l_Dg, l_Dp, l_lambda, l_mean, l_fa, l_fb, l_mua, l_mub;
     int l_comp, l_2ndorder;
-    int l_points, l_moments, l_corr, l_vs, l_bif;
+    int l_points, l_moments, l_corr, l_vs, l_bif, l_basin;
 
     l_amp = d_amp;
     l_omega = d_omega;
@@ -589,6 +595,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_points = d_points;
     l_vs = d_vs;
     l_bif = d_bif;
+    l_basin = d_basin;
    
     //run simulation for multiple values of the system parameters
     if (l_moments || l_bif) {
@@ -753,7 +760,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
                          l_dcd, l_dcd, l_dst, l_dst, l_fa, l_fb, l_mua, l_mub, l_dt);
             }
         
-            if (l_moments) {
+            if (l_moments || l_bif || l_basin) {
                 if (l_trigger) {
                     l_sv += l_v;
                     l_sv2 += l_v*l_v;
@@ -896,13 +903,14 @@ void initial_conditions()
 {
     curandGenerateUniform(gen, h_x, h_threads); //x in (0,1]
     curandGenerateUniform(gen, h_v, h_threads);
-    curandGenerateUniform(gen, h_w, h_threads);
+    memset(h_w, 0.0f, size_f);
+    if (h_av) curandGenerateUniform(gen, h_w, h_threads);
 
     long i;
 
     for (i = 0; i < h_threads; i++) {
         h_v[i] = 4.0f*h_v[i] - 2.0f; //v in (-2,2]
-        h_w[i] *= 2.0f*PI; //w in (0,2\pi]
+        if (h_av) h_w[i] *= 2.0f*PI; //w in (0,2\pi]
     }
 
     memset(h_fx, 0.0f, size_f);
@@ -1381,22 +1389,34 @@ int main(int argc, char **argv)
             memcpy(h_x0, h_x, size_f);
             memcpy(h_v0, h_v, size_f);
             memcpy(h_w0, h_w, size_f);
+
+            h_trigger = 0;
+            cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
         }
 
-        for (i = 0; i < h_steps; i += h_samples) {
+        for (i = 0; i <= h_steps; i += h_samples) {
             run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
+            if (h_basin) {
+                if (i == h_trans*h_spp) {
+                    h_trigger = 1;
+                    cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+                }
+            }
         }
         
         copy_from_dev();
         unfold(h_x, h_fx);
+        if (h_basin) {
+            cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
+        }
 
         if (h_basin) {
             printf("#x0 v0 x v\n");
     
             for (i = 0; i < h_threads; i++) {
-                printf("%e %e %e %e\n", h_x0[i], h_v0[i], h_x[i], h_v[i]); 
+                printf("%e %e %e %e\n", h_x0[i], h_v0[i], h_x[i], h_sv[i]/h_spp); 
             }
         } else {
             printf("#x v\n");
@@ -1614,17 +1634,25 @@ int main(int argc, char **argv)
 
         printf("#%c v\n", h_domainx);
 
-        for (i = 0; i < h_steps; i += h_samples) {
+        h_trigger = 0;
+        cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+
+        for (i = 0; i <= h_steps; i += h_samples) {
             run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
+            if (i == h_trans*h_spp) {
+                h_trigger = 1;
+                cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
+            }
         }
 
         copy_from_dev();
+        cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
         
         for (j = 0; j < h_points; j++) {
             for (i = 0; i < h_paths; i++) {
-                printf("%e %e\n", h_dx[j], h_v[j*h_paths + i]);
+                printf("%e %e\n", h_dx[j], h_sv[j*h_paths + i]/h_spp);
             }
         }
     }
