@@ -38,8 +38,8 @@ __constant__ char d_domainx;
 __constant__ int d_moments, d_points, d_corr, d_vs, d_bif, d_basin;
 
 //vector
-float *h_x, *h_tx, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx, *h_vc;
-float *d_x, *d_fx, *d_v, *d_w, *d_fw, *d_sv, *d_sv2, *d_dx, *d_vc;
+float *h_x, *h_tx, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_sv4, *h_dx, *h_vc;
+float *d_x, *d_fx, *d_v, *d_w, *d_fw, *d_sv, *d_sv2, *d_sv4, *d_dx, *d_vc;
 int *h_pn;
 int *d_pcd, *d_dcd, *d_dst, *d_pn;
 unsigned int *h_seeds, *d_seeds;
@@ -559,13 +559,13 @@ void unfold(float *x, float *fx)
 }
 
 //actual simulation kernel
-__global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *d_sv2, float *d_dx, int *d_pcd, int *d_dcd, int *d_dst, curandState *d_states, \
+__global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *d_sv2, float *d_sv4, float *d_dx, int *d_pcd, int *d_dcd, int *d_dst, curandState *d_states, \
                         float *d_vc, int *d_pn)
 {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     //cache path and model parameters in local variables
-    float l_x, l_v, l_w, l_sv, l_sv2, l_dx; 
+    float l_x, l_v, l_w, l_sv, l_sv2, l_sv4, l_dx; 
     int l_pn;
     curandState l_state;
 
@@ -574,6 +574,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_w = d_w[idx];
     l_sv = d_sv[idx];
     l_sv2 = d_sv2[idx];
+    l_sv4 = d_sv4[idx];
     l_state = d_states[idx];
     l_pn = d_pn[idx];
 
@@ -769,6 +770,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
                 if (l_trigger) {
                     l_sv += l_v;
                     l_sv2 += l_v*l_v;
+                    l_sv4 += l_v*l_v*l_v*l_v;
                 }
             }
 
@@ -789,6 +791,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     d_w[idx] = l_w;
     d_sv[idx] = l_sv;
     d_sv2[idx] = l_sv2;
+    d_sv4[idx] = l_sv4;
     d_pcd[idx] = l_pcd;
     d_dcd[idx] = l_dcd;
     d_dst[idx] = l_dst;
@@ -858,6 +861,7 @@ void prepare()
     //moments specific requirements
     h_sv = (float*)malloc(size_f);
     h_sv2 = (float*)malloc(size_f);
+    h_sv4 = (float*)malloc(size_f);
     h_dx = (float*)malloc(size_p);
 
     float dxtmp = h_beginx;
@@ -877,6 +881,7 @@ void prepare()
         
     cudaMalloc((void**)&d_sv, size_f);
     cudaMalloc((void**)&d_sv2, size_f);
+    cudaMalloc((void**)&d_sv4, size_f);
     cudaMalloc((void**)&d_dx, size_p);
     
     cudaMemcpy(d_dx, h_dx, size_p, cudaMemcpyHostToDevice);
@@ -892,6 +897,7 @@ void copy_to_dev()
 
     cudaMemcpy(d_sv, h_sv, size_f, cudaMemcpyHostToDevice);
     cudaMemcpy(d_sv2, h_sv2, size_f, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_sv4, h_sv4, size_f, cudaMemcpyHostToDevice);
 
     cudaMemcpy(d_vc, h_vc, h_paths*h_vs*sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_pn, h_pn, size_i, cudaMemcpyHostToDevice);
@@ -924,6 +930,7 @@ void initial_conditions()
     
     memset(h_sv, 0.0f, size_f);
     memset(h_sv2, 0.0f, size_f);
+    memset(h_sv4, 0.0f, size_f);
 
     memset(h_vc, 0.0f, h_paths*h_vs*sizeof(float));
     memset(h_pn, 0, size_i);
@@ -1010,13 +1017,14 @@ void frac_moment(float *h_x, float &fm, float q)
 }
 
 //calculate the first two moments of <v> and asymptotic: exponent of fractional moments q\\nu(q), diffusion coefficient D(t) and non-gaussianity parameter G(t)
-void moments(float *av, float *av2, float *efm, float *dc, float *ngpx, float *ngpv, float *fms)
+void moments(float *av, float *av2, float *av4, float *efm, float *dc, float *ngpx, float *ngpv, float *fms)
 {
-    float sv, sv2, sx, sx2, sev2, sx4, sev4, dt, tempo, tmp, taua, taub, fm, nfm;
+    float sv, sv2, sv4, sx, sx2, sx4, dt, tempo, tmp, taua, taub, fm, nfm;
     int i, j;
 
     cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_sv2, d_sv2, size_f, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_sv4, d_sv4, size_f, cudaMemcpyDeviceToHost);
     copy_from_dev();
 
     unfold(h_x, h_fx);
@@ -1024,24 +1032,23 @@ void moments(float *av, float *av2, float *efm, float *dc, float *ngpx, float *n
     for (j = 0; j < h_points; j++) {
         sv = 0.0f;
         sv2 = 0.0f;
+        sv4 = 0.0f;
         sx = 0.0f;
         sx2 = 0.0f;
         sx4 = 0.0f;
-        sev2 = 0.0f;
-        sev4 = 0.0f;
 
         for (i = 0; i < h_paths; i++) {
             sv += h_sv[j*h_paths + i];
             sv2 += h_sv2[j*h_paths + i];
+            sv4 += h_sv4[j*h_paths + i];
             sx += h_x[j*h_paths + i];
             sx2 += h_x[j*h_paths + i]*h_x[j*h_paths + i];
             sx4 += h_x[j*h_paths + i]*h_x[j*h_paths + i]*h_x[j*h_paths + i]*h_x[j*h_paths + i];
-            sev2 += h_v[j*h_paths + i]*h_v[j*h_paths + i];
-            sev4 += h_v[j*h_paths + i]*h_v[j*h_paths + i]*h_v[j*h_paths + i]*h_v[j*h_paths + i];
         }
 
         av[j] = sv/((h_periods - h_trans)*h_spp)/h_paths;
         av2[j] = sv2/((h_periods - h_trans)*h_spp)/h_paths;
+        av4[j] = sv4/((h_periods - h_trans)*h_spp)/h_paths;
 
         //external driving
         if (h_domainx == 'w') {
@@ -1151,9 +1158,7 @@ void moments(float *av, float *av2, float *efm, float *dc, float *ngpx, float *n
 
         sx /= h_paths;
         sx2 /= h_paths;
-        sev2 /= h_paths;
         sx4 /= h_paths;
-        sev4 /= h_paths;
 
         efm[j] = 0.0f;
 
@@ -1166,7 +1171,7 @@ void moments(float *av, float *av2, float *efm, float *dc, float *ngpx, float *n
         efm[j] /= (h_periods - h_trans)*h_spp/h_samples - 1;
         dc[j] = (sx2 - sx*sx)/(2.0f*h_steps*dt);
         ngpx[j] = sx4/(3.0f*sx2*sx2) - 1.0f;
-        ngpv[j] = sev4/(3.0f*sev2*sev2) - 1.0f;
+        ngpv[j] = av4[j]/(3.0f*av2[j]*av2[j]) - 1.0f;
     }
 }
 
@@ -1226,10 +1231,12 @@ void finish()
     
     free(h_sv);
     free(h_sv2);
+    free(h_sv4);
     free(h_dx);
 
     cudaFree(d_sv);
     cudaFree(d_sv2);
+    cudaFree(d_sv4);
     cudaFree(d_dx);
 }
 
@@ -1252,7 +1259,7 @@ int main(int argc, char **argv)
         h_initnoise = 1;
         cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-        run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+        run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
         h_initnoise = 0;
         cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1260,11 +1267,12 @@ int main(int argc, char **argv)
 
     //the first two moments of <v> and asymptotic: exponent of fractional moments q\\nu(q), diffusion coefficient D(t) and non-gaussianity parameter G(t)
     if (h_moments) {
-        float *av, *av2, *efm, *dc, *ngpx, *ngpv, *fms;
+        float *av, *av2, *av4, *efm, *dc, *ngpx, *ngpv, *fms;
         long i;
 
         av = (float*)malloc(size_p);
         av2 = (float*)malloc(size_p);
+        av4 = (float*)malloc(size_p);
         efm = (float*)malloc(size_p);
         dc = (float*)malloc(size_p);
         ngpx = (float*)malloc(size_p);
@@ -1280,7 +1288,7 @@ int main(int argc, char **argv)
             cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
             for (i = 0; i < h_steps; i += h_samples) {
-                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                 fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
                 fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
                 if (i == h_trans*h_spp) {
@@ -1307,7 +1315,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            moments(av, av2, efm, dc, ngpx, ngpv, fms);
+            moments(av, av2, av4, efm, dc, ngpx, ngpv, fms);
 
             printf("#%c <<v>> <<v^2>> qnu(q) D_x Gx Gv\n", h_domainx);
             for (i = 0; i < h_points; i++) {
@@ -1377,7 +1385,7 @@ int main(int argc, char **argv)
                 cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
                 for (i = 0; i < h_steps; i += h_samples) {
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                     fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
                     fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
                     if (i == h_trans*h_spp) {
@@ -1404,7 +1412,7 @@ int main(int argc, char **argv)
                     }
                }
  
-                moments(av, av2, efm, dc, ngpx, ngpv, fms);
+                moments(av, av2, av4, efm, dc, ngpx, ngpv, fms);
                 
                 for (j = 0; j < h_points; j++) {
                     printf("%e %e %e %e %e %e %e %e\n", h_dx[j], h_dy, av[j], av2[j], efm[j], dc[j], ngpx[j], ngpv[j]);
@@ -1419,7 +1427,7 @@ int main(int argc, char **argv)
                     h_initnoise = 1;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
                     h_initnoise = 0;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1431,6 +1439,7 @@ int main(int argc, char **argv)
 
         free(av);
         free(av2);
+        free(av4);
         free(efm);
         free(dc);
         free(ngpx);
@@ -1483,7 +1492,7 @@ int main(int argc, char **argv)
                 memcpy(h_tx, h_x, h_paths*sizeof(float));
                 printf("%e %e %e %e %e %e %e %e %e\n", t, sx, sv, sx2, sv2, sx4, sv4, nfm, efm);
             }
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
         }
@@ -1509,7 +1518,7 @@ int main(int argc, char **argv)
         }
 
         for (i = 0; i <= h_steps; i += h_samples) {
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
             if (h_basin) {
@@ -1564,7 +1573,7 @@ int main(int argc, char **argv)
                     cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
                 }
 
-                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             }
 
             cudaMemcpy(h_vc, d_vc, h_paths*h_vs*sizeof(float), cudaMemcpyDeviceToHost);
@@ -1714,7 +1723,7 @@ int main(int argc, char **argv)
                         cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
                     }
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                 }
 
                 cudaMemcpy(h_vc, d_vc, h_paths*h_vs*sizeof(float), cudaMemcpyDeviceToHost);
@@ -1729,7 +1738,7 @@ int main(int argc, char **argv)
                     h_initnoise = 1;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
                     h_initnoise = 0;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1752,7 +1761,7 @@ int main(int argc, char **argv)
         cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
         for (i = 0; i <= h_steps; i += h_samples) {
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
             if (i == h_trans*h_spp) {
