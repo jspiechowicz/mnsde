@@ -20,12 +20,12 @@
  *  - exponential Poissonian kicks amplitude distribution
  *  - simplified weak order 1.0 regular euler-maruyama scheme
  *  - simplified weak order 2.0 adapted predictor-corrector scheme
- *  - asymptotic long time average velocity <<v>>, <<v^2>> and diffusion coefficient
- *  - ensemble averaged trajectory <x>(t), <v>(t) and <x^2>(t), <v^2>(t)
+ *  - asymptotic long time average velocity <<v>>, <<v^2>> and asymptotic: exponent of the fractional moment q\nu(q), diffusion coefficient D
+ *  - bifurcation diagram of attractors and accompanying velocities
+ *  - basins of position and velocity attraction
  *  - the final position x and velocity v of all paths for histogram generation
- *  - velocity correlation function and its power spectrum
- *  - velocity bifurcation diagram
- *  - position and velocity basins of attractions
+ *  - ensemble averaged trajectory <x>(t), <v>(t) and <x^2>(t), <v^2>(t) as well as the time dependent fractional moment together with its exponent qnu(q)
+ *  - velocity autocorrelation function and its power spectrum
  *  - avoidance of the run time limit on kernels by splitting the main kernel into smaller parts
  *  - path parameters folding for utilization of single precision arithmetics
  *  - scan over multiple values of the system parameters in a single kernel call

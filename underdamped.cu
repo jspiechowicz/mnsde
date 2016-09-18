@@ -35,11 +35,11 @@ char h_domainx, h_domainy;
 float h_beginx, h_endx, h_beginy, h_endy, h_tau, h_q;
 int h_logx, h_logy, h_points, h_moments, h_traj, h_hist, h_corr, h_vs, h_spectrum, h_bif, h_basin;
 __constant__ char d_domainx;
-__constant__ int d_moments, d_points, d_corr, d_vs, d_bif, d_basin;
+__constant__ int d_moments, d_points, d_corr, d_vs, d_bif, d_basin, d_hist;
 
 //vector
-float *h_x, *h_tx, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_sv4, *h_dx, *h_vc;
-float *d_x, *d_fx, *d_v, *d_w, *d_fw, *d_sv, *d_sv2, *d_sv4, *d_dx, *d_vc;
+float *h_x, *h_tx, *h_fx, *h_v, *h_w, *h_fw, *h_sv, *h_sv2, *h_dx, *h_vc;
+float *d_x, *d_fx, *d_v, *d_w, *d_fw, *d_sv, *d_sv2, *d_dx, *d_vc;
 int *h_pn;
 int *d_pcd, *d_dcd, *d_dst, *d_pn;
 unsigned int *h_seeds, *d_seeds;
@@ -99,53 +99,54 @@ void usage(char **argv)
     printf("    -d, --gam=FLOAT         set the viscosity '\\gamma' to FLOAT\n");
     printf("    -e, --Dg=FLOAT          set the Gaussian noise intensity 'D_G' to FLOAT\n");
     printf("    -f, --Dp=FLOAT          set the Poissonian noise intensity 'D_P' to FLOAT\n");
-    printf("    -g, --lambda=FLOAT      set the Poissonian kicks frequency '\\lambda' to FLOAT\n");
-    printf("    -h, --comp=INT          choose between biased and unbiased Poissonian or dichotomous noise. INT can be one of:\n");
-    printf("                            0: biased; 1: unbiased\n");
+    printf("    -g, --lambda=FLOAT      set the Poissonian kicks frequency '\\lambda' to FLOAT. Nonzero value of this parameter activates the Poissonian noise in the model\n");
+    printf("    -h, --comp=INT          choose between the biased and unbiased Poissonian or dichotomous noise. INT can be one of: 0: biased; 1: unbiased\n");
     printf("    -D, --fa=FLOAT          set the first state of the dichotomous noise 'F_a' to FLOAT\n");
     printf("    -E, --fb=FLOAT          set the second state of the dichotomous noise 'F_b' to FLOAT\n");
     printf("    -F, --mua=FLOAT         set the transition rate of the first state of dichotomous noise '\\mu_a' to FLOAT\n");
     printf("    -G, --mub=FLOAT         set the transition rate of the second state of dichotomous noise '\\mu_b' to FLOAT\n");
-    printf("    -C, --mean=FLOAT        if is nonzero, fix the mean value of Poissonian noise or dichotomous noise to FLOAT, matters only for domains p, l, i, j, m or n\n");
+    printf("                            if either '\\mu_a' or '\\mu_b' is nonzero the dichotomous noise is introduced in the equation of the model\n");
+    printf("    -C, --mean=FLOAT        if is nonzero, fix the mean value of Poissonian noise or dichotomous noise to FLOAT, matters only for domains p, l, i, j, m or n, see below\n");
     printf("Simulation params:\n");
     printf("    -i, --dev=INT           set the gpu device to INT\n");
     printf("    -j, --block=INT         set the gpu block size to INT\n");
     printf("    -k, --paths=INT         set the number of paths to INT\n");
     printf("    -l, --periods=INT       set the number of periods to INT\n");
-    printf("    -m, --trans=FLOAT       specify fraction FLOAT of periods which stands for transients\n");
-    printf("    -n, --spp=INT           specify how many integration steps should be calculated for the smallest characteristic period of the system\n");
+    printf("    -m, --trans=INT         specify number of periods which stands for transients\n");
+    printf("    -n, --spp=INT           specify how many integration steps should be calculated for the smallest characteristic timescale of the system\n");
     printf("    -o, --samples=INT       specify how many integration steps should be calculated for a single kernel call\n");
     printf("    -p, --algorithm=STRING  sets the algorithm. STRING can be one of:\n");
     printf("                            predcorr: simplified weak order 2.0 adapted predictor-corrector\n");
     printf("                            euler: simplified weak order 1.0 regular euler-maruyama\n");
-    printf("    -K, --av=INT            if is 1 then additional average over initial phase of driving is performed\n");
+    printf("    -K, --av=INT            if is 1 then additional average over initial phase of driving is performed.\n");
     printf("Output params:\n");
     printf("    -q, --mode=STRING       sets the output mode. STRING can be one of:\n");
-    printf("                            moments: the first two moments <<v>>, <<v^2>> and asymptotic: exponent of fractional moments q\\nu(q), diffusion coefficient D(t) and non-gaussianity parameter G(t)\n");
-    printf("                                -L, --q=FLOAT           set the fractional moment to FLOAT\n");
-    printf("                            bifurcation: velocity bifurcation diagram\n");
+    printf("                            moments: the first two moments <<v>>, <<v^2>> and asymptotic: exponent of the fractional moment q\\nu(q), diffusion coefficient D and nongaussianity parameter G\n");
     printf("                                -r, --domain=STRING     simultaneously scan over one or two model params. STRING can be one of:\n");
     printf("                                                        1d: only one parameter; 2d: two parameters at once\n");
     printf("                                -s, --domainx=CHAR      sets the first domain of the model. CHAR can be one of:\n");
-    printf("                                                        a: amp; w: omega, f: force; g: gam; D: Dg; p: Dp; l: lambda; i: fa; j: fb; m: mua; n: mub\n");
-    printf("                                -t, --domainy=CHAR      sets the second domain of the model (works only for moments mode and with --domain=2d). CHAR can be the same as above.\n");
-    printf("                                -u, --logx=INT          choose between linear and logarithmic scale of the domainx\n");
-    printf("                                                        0: linear; 1: logarithmic\n");
-    printf("                                -v, --logy=INT          the same as above but for domainy\n");
-    printf("                                -w, --points=INT        set the number of samples to generate between begin and end\n");
+    printf("                                                        a: amp; w: omega, f: force; g: gam; D: Dg; p: Dp; l: lambda; i: fa; j: fb; m: mua; n: mub; q: '\\mu_q'\n");
     printf("                                -y, --beginx=FLOAT      set the starting value of the domainx to FLOAT\n");
     printf("                                -z, --endx=FLOAT        set the end value of the domainx to FLOAT\n");
-    printf("                                -A, --beginy=FLOAT      the same as --beginx, but for domainy\n");
-    printf("                                -B, --endy=FLOAT        the same as --endx, but for domainy\n");
-    printf("                            trajectory: ensemble averaged trajectory <x>(t), <v>(t), <x^2>(t), <v^2>(t), <x^4(t)>, <v^4(t)> as well as fractional moment together with its exponent qnu(q)\n");
+    printf("                                -w, --points=INT        set the number of samples to generate between beginx and endx\n");
+    printf("                                -u, --logx=INT          choose between linear and logarithmic scale of the domainx\n");
+    printf("                                                        0: linear; 1: logarithmic\n");
+    printf("                                -L, --q=FLOAT           set the fractional moment '\\mu_q' to FLOAT\n");
+    printf("                                 If --domain=2d the user must specify also the following options corresponding to the second axis: --domainy, --beginy, --endy, --logy\n");
+    printf("                            bifurcation: bifurcation diagram of attractors and accompanying velocities\n");
+    printf("                                in this mode --domain is fixed to 1d. The user must specify the remaining options --domainx, --beginx, --endx, --points, --logx\n");
+    printf("                            basin: basins of position and velocity attraction\n");
     printf("                            histogram: the final position x and velocity v of all paths\n");
+    printf("                            trajectory: ensemble averaged trajectory <x>(t), <v>(t), <x^2>(t), <v^2>(t), nongaussianity parameter G(t) as well as\n");
+    printf("                                        the time dependent fractional moment together with its exponent qnu(q)\n");
+    printf("                                -L, --q=FLOAT           set the fractional moment '\\mu_q' to FLOAT\n");
+
     printf("                            correlation: velocity autocorrelation function <<v(t + \\tau)v(t)>>)\n");
     printf("                                -H, --vs=INT            set the number of saved instantaneous velocities v(t)\n");
     printf("                                -I, --dump=INT          save the velocity of each particle every INT integration steps\n");
-    printf("                                -J, --tau=FLOAT         if is nonzero, calculate velocity autocorrelation function for a fixed '\\tau'\n");
-    printf("                                                        and multiple values of model param determined by --domainx=CHAR\n");
-    printf("                            spectrum: power spectrum S(\\omega)\n");
-    printf("                            basin: basins of position and velocity attraction\n");
+    printf("                                -J, --tau=FLOAT         if is nonzero, calculate velocity autocorrelation function for a fixed '\\tau' and multiple values of the model param.\n");
+    printf("                                                        --domain is fixed to 1d. The user must specify the remaining options --domainx, --beginx, --endx, --points, --logx\n");
+    printf("                            spectrum: power spectrum S(\\omega) of velocity fluctuations\n");
     printf("\n");
 }
 
@@ -155,7 +156,7 @@ void parse_cla(int argc, char **argv)
     float ftmp;
     int c, itmp;
 
-    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H:I:J:K:M", options, NULL)) != EOF) {
+    while( (c = getopt_long(argc, argv, "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:w:y:z:A:B:C:D:E:F:G:H:I:J:K:L", options, NULL)) != EOF) {
         switch (c) {
             case 'a':
                 ftmp = atof(optarg);
@@ -283,6 +284,7 @@ void parse_cla(int argc, char **argv)
                 cudaMemcpyToSymbol(d_corr, &h_corr, sizeof(int));
                 cudaMemcpyToSymbol(d_bif, &h_bif, sizeof(int));
                 cudaMemcpyToSymbol(d_basin, &h_basin, sizeof(int));
+                cudaMemcpyToSymbol(d_hist, &h_hist, sizeof(int));
                 break;
             case 'r':
                 h_domain = optarg;
@@ -350,7 +352,7 @@ void parse_cla(int argc, char **argv)
             case 'K':
                 h_av = atoi(optarg);
                 break;
-			case 'L':
+            case 'L':
                 h_q = atof(optarg);
                 break;
         }
@@ -559,13 +561,13 @@ void unfold(float *x, float *fx)
 }
 
 //actual simulation kernel
-__global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *d_sv2, float *d_sv4, float *d_dx, int *d_pcd, int *d_dcd, int *d_dst, curandState *d_states, \
+__global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *d_sv2, float *d_dx, int *d_pcd, int *d_dcd, int *d_dst, curandState *d_states, \
                         float *d_vc, int *d_pn)
 {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     //cache path and model parameters in local variables
-    float l_x, l_v, l_w, l_sv, l_sv2, l_sv4, l_dx; 
+    float l_x, l_v, l_w, l_sv, l_sv2, l_dx; 
     int l_pn;
     curandState l_state;
 
@@ -574,13 +576,12 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_w = d_w[idx];
     l_sv = d_sv[idx];
     l_sv2 = d_sv2[idx];
-    l_sv4 = d_sv4[idx];
     l_state = d_states[idx];
     l_pn = d_pn[idx];
 
     float l_amp, l_omega, l_force, l_gam, l_Dg, l_Dp, l_lambda, l_mean, l_fa, l_fb, l_mua, l_mub;
     int l_comp, l_2ndorder;
-    int l_points, l_moments, l_corr, l_vs, l_bif, l_basin;
+    int l_points, l_moments, l_corr, l_vs, l_bif, l_basin, l_hist;
 
     l_amp = d_amp;
     l_omega = d_omega;
@@ -602,6 +603,7 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     l_vs = d_vs;
     l_bif = d_bif;
     l_basin = d_basin;
+    l_hist = d_hist;
    
     //run simulation for multiple values of the system parameters
     if (l_moments || l_bif) {
@@ -766,11 +768,10 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
                          l_dcd, l_dcd, l_dst, l_dst, l_fa, l_fb, l_mua, l_mub, l_dt);
             }
         
-            if (l_moments || l_bif || l_basin) {
+            if (l_moments || l_bif || l_basin || l_hist) {
                 if (l_trigger) {
                     l_sv += l_v;
-                    l_sv2 += l_v*l_v;
-                    l_sv4 += l_v*l_v*l_v*l_v;
+                    if (l_moments) l_sv2 += l_v*l_v;
                 }
             }
 
@@ -791,7 +792,6 @@ __global__ void run_sim(float *d_x, float *d_v, float *d_w, float *d_sv, float *
     d_w[idx] = l_w;
     d_sv[idx] = l_sv;
     d_sv2[idx] = l_sv2;
-    d_sv4[idx] = l_sv4;
     d_pcd[idx] = l_pcd;
     d_dcd[idx] = l_dcd;
     d_dst[idx] = l_dst;
@@ -811,8 +811,8 @@ void prepare()
     h_grid = h_threads/h_block;
 
     //number of steps
-    h_steps = h_periods*h_spp;
-     
+    h_steps = (long) (h_periods*h_spp);
+
     //host memory allocation
     size_f = h_threads*sizeof(float);
     size_i = h_threads*sizeof(int);
@@ -834,7 +834,7 @@ void prepare()
     curandSetPseudoRandomGeneratorSeed(gen, time(NULL));
 
     curandGenerate(gen, h_seeds, h_threads);
- 
+
     //device memory allocation
     cudaMalloc((void**)&d_x, size_f);
     cudaMalloc((void**)&d_fx, size_f);
@@ -858,17 +858,16 @@ void prepare()
     free(h_seeds);
     cudaFree(d_seeds);
 
-    //moments specific requirements
+    //specific requirements for selected output modes
     h_sv = (float*)malloc(size_f);
     h_sv2 = (float*)malloc(size_f);
-    h_sv4 = (float*)malloc(size_f);
     h_dx = (float*)malloc(size_p);
 
     float dxtmp = h_beginx;
     float dxstep = (h_endx - h_beginx)/h_points;
 
     int i;
-        
+
     //set domainx
     for (i = 0; i < h_points; i++) {
         if (h_logx) {
@@ -878,12 +877,11 @@ void prepare()
         }
         dxtmp += dxstep;
     }
-        
+
     cudaMalloc((void**)&d_sv, size_f);
     cudaMalloc((void**)&d_sv2, size_f);
-    cudaMalloc((void**)&d_sv4, size_f);
     cudaMalloc((void**)&d_dx, size_p);
-    
+
     cudaMemcpy(d_dx, h_dx, size_p, cudaMemcpyHostToDevice);
 }
 
@@ -897,7 +895,6 @@ void copy_to_dev()
 
     cudaMemcpy(d_sv, h_sv, size_f, cudaMemcpyHostToDevice);
     cudaMemcpy(d_sv2, h_sv2, size_f, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_sv4, h_sv4, size_f, cudaMemcpyHostToDevice);
 
     cudaMemcpy(d_vc, h_vc, h_paths*h_vs*sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_pn, h_pn, size_i, cudaMemcpyHostToDevice);
@@ -927,10 +924,9 @@ void initial_conditions()
 
     memset(h_fx, 0.0f, size_f);
     memset(h_fw, 0.0f, size_f);
-    
+
     memset(h_sv, 0.0f, size_f);
     memset(h_sv2, 0.0f, size_f);
-    memset(h_sv4, 0.0f, size_f);
 
     memset(h_vc, 0.0f, h_paths*h_vs*sizeof(float));
     memset(h_pn, 0, size_i);
@@ -952,7 +948,7 @@ void correlation(float *cf, int n)
                     scf += h_vc[j*h_vs + i]*h_vc[j*h_vs + i + k];
                 }
             }
-        
+
             scf /= h_paths*(h_vs - k);
             cf[k] = scf;
         }
@@ -963,7 +959,7 @@ void correlation(float *cf, int n)
                 scf += h_vc[j*h_vs + i]*h_vc[j*h_vs + i + n];
             }
         }
-        
+
         scf /= h_paths*(h_vs - n);
         cf[0] = scf;
     }
@@ -993,11 +989,11 @@ void spectrum(float *cf, double *ps)
     gsl_fft_real_wavetable_free(wave);
 }
 
-//calculate the fractional moment of the order q
+//calculate the fractional moment '\\mu_q' of the order q
 void frac_moment(float *h_x, float &fm, float q)
 {
     float sx;
-    int i;
+    long i;
 
     sx = 0.0f;
 
@@ -1016,15 +1012,14 @@ void frac_moment(float *h_x, float &fm, float q)
     fm /= h_paths;
 }
 
-//calculate the first two moments of <v> and asymptotic: exponent of fractional moments q\\nu(q), diffusion coefficient D(t) and non-gaussianity parameter G(t)
-void moments(float *av, float *av2, float *av4, float *efm, float *dc, float *ngpx, float *ngpv, float *fms)
+//calculate the first two moments of <v> and asymptotic: exponent of fractional moment q\\nu(q), diffusion coefficient D and non-gaussianity parameter G
+void moments(float *av, float *av2, float *efm, float *dc, float *ngpx, float *ngpv, float *fms)
 {
-    float sv, sv2, sv4, sx, sx2, sx4, dt, tempo, tmp, taua, taub, fm, nfm;
+    float sv, sv2, sx, sx2, dt, tempo, tmp, taua, taub, fm, nfm, skxn, skxd, skvn, skvd;
     int i, j;
 
     cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_sv2, d_sv2, size_f, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_sv4, d_sv4, size_f, cudaMemcpyDeviceToHost);
     copy_from_dev();
 
     unfold(h_x, h_fx);
@@ -1032,23 +1027,39 @@ void moments(float *av, float *av2, float *av4, float *efm, float *dc, float *ng
     for (j = 0; j < h_points; j++) {
         sv = 0.0f;
         sv2 = 0.0f;
-        sv4 = 0.0f;
         sx = 0.0f;
         sx2 = 0.0f;
-        sx4 = 0.0f;
+        skxn = 0.0f;
+        skxd = 0.0f;
+        skvn = 0.0f;
+        skvd = 0.0f;
 
         for (i = 0; i < h_paths; i++) {
             sv += h_sv[j*h_paths + i];
             sv2 += h_sv2[j*h_paths + i];
-            sv4 += h_sv4[j*h_paths + i];
             sx += h_x[j*h_paths + i];
             sx2 += h_x[j*h_paths + i]*h_x[j*h_paths + i];
-            sx4 += h_x[j*h_paths + i]*h_x[j*h_paths + i]*h_x[j*h_paths + i]*h_x[j*h_paths + i];
         }
 
+        sx /= h_paths;
+        sx2 /= h_paths;
         av[j] = sv/((h_periods - h_trans)*h_spp)/h_paths;
         av2[j] = sv2/((h_periods - h_trans)*h_spp)/h_paths;
-        av4[j] = sv4/((h_periods - h_trans)*h_spp)/h_paths;
+
+        for (i = 0; i < h_paths; i++) {
+            skxd += (h_x[j*h_paths + i] - sx)*(h_x[j*h_paths + i] - sx);
+            skxn += skxd*skxd;
+            skvd += ( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] )*( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] );
+            skvn += skvd*skvd;
+        }
+
+        skxd = skxd/h_paths;
+        skxn = skxn/h_paths;
+        skvd = skvd/h_paths;
+        skvn = skvn/h_paths;
+
+        skxd = skxd*skxd;
+        skvd = skvd*skvd;
 
         //external driving
         if (h_domainx == 'w') {
@@ -1056,7 +1067,7 @@ void moments(float *av, float *av2, float *av4, float *efm, float *dc, float *ng
         } else {
             tempo = 2.0f*PI/h_omega;
         }
-       
+
         dt = tempo;
 
         //Poissonian
@@ -1156,10 +1167,6 @@ void moments(float *av, float *av2, float *av4, float *efm, float *dc, float *ng
 
         dt /= h_spp;
 
-        sx /= h_paths;
-        sx2 /= h_paths;
-        sx4 /= h_paths;
-
         efm[j] = 0.0f;
 
         for (i = 0; i < (h_periods - h_trans)*h_spp/h_samples - 1; i++) {
@@ -1170,38 +1177,58 @@ void moments(float *av, float *av2, float *av4, float *efm, float *dc, float *ng
 
         efm[j] /= (h_periods - h_trans)*h_spp/h_samples - 1;
         dc[j] = (sx2 - sx*sx)/(2.0f*h_steps*dt);
-        ngpx[j] = sx4/(3.0f*sx2*sx2) - 1.0f;
-        ngpv[j] = av4[j]/(3.0f*av2[j]*av2[j]) - 1.0f;
+        ngpx[j] = skxn/(3.0f*skxd) - 1.0f;
+        ngpv[j] = skvn/(3.0f*skvd) - 1.0f;
     }
 }
 
 //calculate ensemble average
-void ensemble_average(float *h_x, float *h_v, float &sx, float &sv, float &sx2, float &sv2, float &sx4, float &sv4)
+void ensemble_average(float *h_x, float *h_v, float &sx, float &sv, float &sx2, float &sv2, float &ngpx, float &ngpv)
 {
+    float skxn, skxd, skvn, skvd;
     long i;
 
     sx = 0.0f;
     sv = 0.0f;
     sx2 = 0.0f;
     sv2 = 0.0f;
-    sx4 = 0.0f;
-    sv4 = 0.0f;
+    ngpx = 0.0f;
+    ngpv = 0.0f;
 
     for (i = 0; i < h_threads; i++) {
         sx += h_x[i];
         sv += h_v[i];
         sx2 += h_x[i]*h_x[i];
         sv2 += h_v[i]*h_v[i];
-        sx4 += h_x[i]*h_x[i]*h_x[i]*h_x[i];
-        sv4 += h_v[i]*h_v[i]*h_v[i]*h_v[i];
     }
 
     sx /= h_threads;
     sv /= h_threads;
     sx2 /= h_threads;
     sv2 /= h_threads;
-    sx4 /= h_threads;
-    sv4 /= h_threads;
+
+    skxn = 0.0f;
+    skxd = 0.0f;
+    skvn = 0.0f;
+    skvd = 0.0f;
+
+    for (i = 0; i < h_threads; i++) {
+        skxd += (h_x[i] - sx)*(h_x[i] - sx);
+        skxn += skxd*skxd;
+        skvd += (h_v[i] - sv)*(h_v[i] - sv);
+        skvn += skvd*skvd;
+    }
+
+    skxd = skxd/h_threads;
+    skxn = skxn/h_threads;
+    skvd = skvd/h_threads;
+    skvn = skvn/h_threads;
+
+    skxd = skxd*skxd;
+    skvd = skvd*skvd;
+    
+    ngpx = skxn/(3.0f*skxd) - 1.0f;
+    ngpv = skvn/(3.0f*skvd) - 1.0f;
 }
 
 //free memory
@@ -1231,12 +1258,10 @@ void finish()
     
     free(h_sv);
     free(h_sv2);
-    free(h_sv4);
     free(h_dx);
 
     cudaFree(d_sv);
     cudaFree(d_sv2);
-    cudaFree(d_sv4);
     cudaFree(d_dx);
 }
 
@@ -1259,26 +1284,28 @@ int main(int argc, char **argv)
         h_initnoise = 1;
         cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-        run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+        run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
         h_initnoise = 0;
         cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
     }
 
-    //the first two moments of <v> and asymptotic: exponent of fractional moments q\\nu(q), diffusion coefficient D(t) and non-gaussianity parameter G(t)
+    //the first two moments of <v> and asymptotic: exponent of fractional moment q\\nu(q), diffusion coefficient D and non-gaussianity parameter G
     if (h_moments) {
-        float *av, *av2, *av4, *efm, *dc, *ngpx, *ngpv, *fms;
-        long i;
+        float *av, *av2, *efm, *dc, *ngpx, *ngpv, *fms;
+        long i, ltmp;
 
         av = (float*)malloc(size_p);
         av2 = (float*)malloc(size_p);
-        av4 = (float*)malloc(size_p);
         efm = (float*)malloc(size_p);
         dc = (float*)malloc(size_p);
         ngpx = (float*)malloc(size_p);
         ngpv = (float*)malloc(size_p);
-        fms = (float*)malloc( ( h_points*(h_periods - h_trans)*h_spp/h_samples )*sizeof(float) );
-        memset(fms, 0.0f, ( h_points*(h_periods - h_trans)*h_spp/h_samples )*sizeof(float) );
+        ltmp = (h_periods-h_trans)*h_spp/h_samples;
+        fms = (float*)malloc(h_points*ltmp*sizeof(float));
+        for (i = 0; i < ltmp*h_points; i++) {
+            fms[i] = 0.0f;
+        }
 
         if ( !strcmp(h_domain, "1d") ) { 
             int j, k;
@@ -1288,7 +1315,7 @@ int main(int argc, char **argv)
             cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
             for (i = 0; i < h_steps; i += h_samples) {
-                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                 fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
                 fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
                 if (i == h_trans*h_spp) {
@@ -1303,11 +1330,10 @@ int main(int argc, char **argv)
 
                     for (j = 0; j < h_points; j++) {
                         memcpy(h_tx, h_x + j*h_paths, h_paths*sizeof(float));
-
                         if (h_domainx == 'q') {
-                            frac_moment(h_tx, fms[j*( (h_periods - h_trans)*h_spp/h_samples ) + k], h_dx[j]);
+                            frac_moment(h_tx, fms[j*ltmp + k], h_dx[j]);
                         } else {
-                            frac_moment(h_tx, fms[j*( (h_periods - h_trans)*h_spp/h_samples ) + k], h_q);
+                            frac_moment(h_tx, fms[j*ltmp + k], h_q);
                         }
                     }
                     
@@ -1315,7 +1341,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            moments(av, av2, av4, efm, dc, ngpx, ngpv, fms);
+            moments(av, av2, efm, dc, ngpx, ngpv, fms);
 
             printf("#%c <<v>> <<v^2>> qnu(q) D_x Gx Gv\n", h_domainx);
             for (i = 0; i < h_points; i++) {
@@ -1385,7 +1411,7 @@ int main(int argc, char **argv)
                 cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
                 for (i = 0; i < h_steps; i += h_samples) {
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                     fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
                     fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
                     if (i == h_trans*h_spp) {
@@ -1412,7 +1438,7 @@ int main(int argc, char **argv)
                     }
                }
  
-                moments(av, av2, av4, efm, dc, ngpx, ngpv, fms);
+                moments(av, av2, efm, dc, ngpx, ngpv, fms);
                 
                 for (j = 0; j < h_points; j++) {
                     printf("%e %e %e %e %e %e %e %e\n", h_dx[j], h_dy, av[j], av2[j], efm[j], dc[j], ngpx[j], ngpv[j]);
@@ -1427,7 +1453,7 @@ int main(int argc, char **argv)
                     h_initnoise = 1;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
                     h_initnoise = 0;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1439,7 +1465,6 @@ int main(int argc, char **argv)
 
         free(av);
         free(av2);
-        free(av4);
         free(efm);
         free(dc);
         free(ngpx);
@@ -1447,9 +1472,9 @@ int main(int argc, char **argv)
         free(fms);
     }
 
-    //ensemble averaged trajectory <x>(t), <v>(t), <x^2>(t), <v^2>(t), <x^4(t)>, <v^4(t)> as well as fractional moment together with its exponent qnu(q)
+    //ensemble averaged trajectory <x>(t), <v>(t), <x^2>(t), <v^2>(t), as well as the time dependent fractional moment together with its exponent qnu(q)
     if (h_traj) {
-        float t, sx, sv, sx2, sv2, sx4, sv4, dt, tmp, taua, taub, fm, nfm, efm;
+        float t, sx, sv, sx2, sv2, dt, tmp, taua, taub, fm, nfm, efm, ngpx, ngpv;
         long i;
 
         dt = 2.0f*PI/h_omega;
@@ -1472,7 +1497,7 @@ int main(int argc, char **argv)
 
         dt /= h_spp;
 
-        printf("#t <x> <v> <x^2> <v^2> <x^4> <v^4> mu_q qnu(q)\n");
+        printf("#t <x> <v> <x^2> <v^2> mu_q qnu(q) Gx Gv\n");
         
         for (i = 0; i < h_steps; i += h_samples) {
             if (i == h_trans*h_spp) {
@@ -1485,14 +1510,14 @@ int main(int argc, char **argv)
                 copy_from_dev();
                 unfold(h_x, h_fx);
                 t = i*dt;
-                ensemble_average(h_x, h_v, sx, sv, sx2, sv2, sx4, sv4);
+                ensemble_average(h_x, h_v, sx, sv, sx2, sv2, ngpx, ngpv);
                 frac_moment(h_x, nfm, h_q);
                 frac_moment(h_tx, fm, h_q);
                 efm = (i-h_samples)*dt*(logf(nfm) - logf(fm))/(h_samples*dt);
                 memcpy(h_tx, h_x, h_paths*sizeof(float));
-                printf("%e %e %e %e %e %e %e %e %e\n", t, sx, sv, sx2, sv2, sx4, sv4, nfm, efm);
+                printf("%e %e %e %e %e %e %e %e %e\n", t, sx, sv, sx2, sv2, nfm, efm, ngpx, ngpv);
             }
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
         }
@@ -1518,40 +1543,37 @@ int main(int argc, char **argv)
         }
 
         for (i = 0; i <= h_steps; i += h_samples) {
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
-            if (h_basin) {
-                if (i == h_trans*h_spp) {
-                    h_trigger = 1;
-                    cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
-                }
+            if (i == h_trans*h_spp) {
+                h_trigger = 1;
+                cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
             }
         }
         
         copy_from_dev();
-        unfold(h_x, h_fx);
-        if (h_basin) {
-            cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
-        }
+        cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
 
         if (h_basin) {
             printf("#x0 v0 x v\n");
     
             for (i = 0; i < h_threads; i++) {
-                printf("%e %e %e %e\n", h_x0[i], h_v0[i], h_x[i], h_sv[i]/h_spp); 
+                printf("%e %e %e %e\n", h_x0[i], h_v0[i], h_x[i], h_sv[i]/((h_periods - h_trans)*h_spp)); 
             }
         } else {
             printf("#x v\n");
         
             for (i = 0; i < h_threads; i++) {
-                printf("%e %e\n", h_x[i], h_v[i]); 
+                printf("%e %e\n", h_x[i], h_sv[i]/((h_periods - h_trans)*h_spp));
             }
         }
 
-        free(h_x0);
-        free(h_v0);
-        free(h_w0);
+        if (h_basin) {
+            free(h_x0);
+            free(h_v0);
+            free(h_w0);
+        }
     }
 
     //velocity autocorrelation function
@@ -1573,7 +1595,7 @@ int main(int argc, char **argv)
                     cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
                 }
 
-                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             }
 
             cudaMemcpy(h_vc, d_vc, h_paths*h_vs*sizeof(float), cudaMemcpyDeviceToHost);
@@ -1723,7 +1745,7 @@ int main(int argc, char **argv)
                         cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
                     }
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
                 }
 
                 cudaMemcpy(h_vc, d_vc, h_paths*h_vs*sizeof(float), cudaMemcpyDeviceToHost);
@@ -1738,7 +1760,7 @@ int main(int argc, char **argv)
                     h_initnoise = 1;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
 
-                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+                    run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
 
                     h_initnoise = 0;
                     cudaMemcpyToSymbol(d_initnoise, &h_initnoise, sizeof(int));
@@ -1751,17 +1773,17 @@ int main(int argc, char **argv)
         free(cf);
     }
 
-    //velocity bifurcation diagram
+    //bifurcation diagram of attractors and accompanying velocities
     if (h_bif) {
         long i, j;
 
-        printf("#%c v\n", h_domainx);
+        printf("#%c x v\n", h_domainx);
 
         h_trigger = 0;
         cudaMemcpyToSymbol(d_trigger, &h_trigger, sizeof(int));
 
         for (i = 0; i <= h_steps; i += h_samples) {
-            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_sv4, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
+            run_sim<<<h_grid, h_block>>>(d_x, d_v, d_w, d_sv, d_sv2, d_dx, d_pcd, d_dcd, d_dst, d_states, d_vc, d_pn);
             fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
             fold<<<h_grid, h_block>>>(d_w, d_fw, (2.0f*PI));
             if (i == h_trans*h_spp) {
@@ -1770,11 +1792,14 @@ int main(int argc, char **argv)
             }
         }
 
+        fold<<<h_grid, h_block>>>(d_x, d_fx, 1.0f);
+        cudaMemcpy(h_x, d_x, size_f, cudaMemcpyDeviceToHost);
         cudaMemcpy(h_sv, d_sv, size_f, cudaMemcpyDeviceToHost);
         
         for (j = 0; j < h_points; j++) {
             for (i = 0; i < h_paths; i++) {
-                printf("%e %e\n", h_dx[j], h_sv[j*h_paths + i]/h_spp);
+                if (h_x[j*h_paths + i] < 0.0f) h_x[j*h_paths + i] += 1.0f;
+                printf("%e %e %e\n", h_dx[j], h_x[j*h_paths + i], h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp));
             }
         }
     }
