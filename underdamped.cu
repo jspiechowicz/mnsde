@@ -1048,9 +1048,10 @@ void moments(float *av, float *av2, float *efm, float *dc, float *ngpx, float *n
 
         for (i = 0; i < h_paths; i++) {
             skxd += (h_x[j*h_paths + i] - sx)*(h_x[j*h_paths + i] - sx);
-            skxn += skxd*skxd;
+            skxn += (h_x[j*h_paths + i] - sx)*(h_x[j*h_paths + i] - sx)*(h_x[j*h_paths + i] - sx)*(h_x[j*h_paths + i] - sx); 
             skvd += ( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] )*( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] );
-            skvn += skvd*skvd;
+            skvn += ( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] )*( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] )\
+                    *( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] )*( h_sv[j*h_paths + i]/((h_periods - h_trans)*h_spp) - av[j] ); 
         }
 
         skxd = skxd/h_paths;
@@ -1214,9 +1215,9 @@ void ensemble_average(float *h_x, float *h_v, float &sx, float &sv, float &sx2, 
 
     for (i = 0; i < h_threads; i++) {
         skxd += (h_x[i] - sx)*(h_x[i] - sx);
-        skxn += skxd*skxd;
+        skxn += (h_x[i] - sx)*(h_x[i] - sx)*(h_x[i] - sx)*(h_x[i] - sx);
         skvd += (h_v[i] - sv)*(h_v[i] - sv);
-        skvn += skvd*skvd;
+        skvn += (h_v[i] - sv)*(h_v[i] - sv)*(h_v[i] - sv)*(h_v[i] - sv);
     }
 
     skxd = skxd/h_threads;
